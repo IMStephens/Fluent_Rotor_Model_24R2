@@ -8,29 +8,30 @@
 #include <string.h>
 #include <math.h>
 
-#define NUM_UDM 15 /* Number of UDM locations the user is advised to allocate. */
-#define max_rotor_zones 10 /* Maximum number of rotor zones. */
-#define max_sections 20 /* Maximum number of blade sections. */
-#define cell_volume_samples 3 /* Number of cells to sample for volume calculation. */
-#define pb_vert_angle_lim (M_PI/4) /* Vertical angle limit. */
-#define dbg 0 /* Set to 1 for debugging. Will print more messages.*/
-#define my_mem_loop(m)for(m = my_mem; m != NULL; m = m->next)
-#define dimport 1 /* Import rotor data from file 1 = YES 0 = NO*/
-#define gauss_routine 0 /* Flag for Gaussian optimisation routine. */
+#define NUM_UDM              15    /* Number of UDM locations to pre-allocate. */
+#define max_rotor_zones      10    /* Maximum number of rotor zones. */
+#define max_sections         20    /* Maximum number of blade sections. */
+#define cell_volume_samples   3    /* Number of cells sampled for volume calc. */
+#define pb_vert_angle_lim    (M_PI / 4.0) /* Vertical angle limit (rad). */
+#define dbg                   0    /* Set to 1 to enable verbose debug output. */
+#define my_mem_loop(m)        for ((m) = my_mem; (m) != NULL; (m) = (m)->next)
+#define dimport               1    /* Import rotor data from file: 1=YES 0=NO. */
+#define gauss_routine         0    /* Enable Gaussian optimisation routine. */
 
 
-/*GUI start*/
+/*---------------------------------------------------------------------------*/
+/* GUI helper: returns the n-th element of a Scheme list.                    */
+/*---------------------------------------------------------------------------*/
 #if !RP_NODE
 static Pointer
-List_Ref(Pointer l, int n){
-  register int i;
-  for (i=0; i<n; ++i){
-    l = CDR(l);
-  }
-  return CAR(l);
+List_Ref(Pointer l, int n)
+{
+    int i;
+    for (i = 0; i < n; ++i)
+        l = CDR(l);
+    return CAR(l);
 }
 #endif
-/*GUI end*/
 
 
 /*---------------------------------------------------------------------------*/
@@ -82,7 +83,7 @@ real rout[max_rotor_zones][max_sections];  /* Normalized outer radius. */
 real rsec[max_rotor_zones][max_sections];  /* Normalizes radius from GUI. */
 real cin[max_rotor_zones][max_sections];   /* Chord at nd. inner radius. */
 real cout[max_rotor_zones][max_sections];  /* Chord at nd. outer radius. */
-real csec[max_rotor_zones][max_sections];	 /* Chord at nd. sectional radius. */
+real csec[max_rotor_zones][max_sections];  /* Chord at nd. sectional radius. */
 real twst[max_rotor_zones][max_sections];  /* Twist*/
 char type[max_rotor_zones][max_sections][30];  /*Profile type name */
 
@@ -92,7 +93,7 @@ int forba[max_rotor_zones]={0,0,0,0,0,0,0,0,0,0};  /*Force balancing 1(ON) 0(OFF
 int momba[max_rotor_zones]={0,0,0,0,0,0,0,0,0,0};  /*Moment balancing 1(ON) 0(OFF)*/
 int fuseid[max_rotor_zones];  /* Fuselage face thread ID. */
 real cmgx[max_rotor_zones];   /* x-location of fuselage CG. */
-real cmgy[max_rotor_zones];	  /* y-location of fuselage CG. */
+real cmgy[max_rotor_zones];   /* y-location of fuselage CG. */
 real cmgz[max_rotor_zones];   /* z-location of fuselage CG. */
 int errchk;                   /* Error check for NaN values. */    
    
@@ -111,39 +112,37 @@ real sum_thrust[max_rotor_zones];  /* Summation of Rotor Thrust. */
 real sum_torque[max_rotor_zones];  /* Summation of Rotor Torque. */
 real power[max_rotor_zones];       /* Summation of Rotor Power. */
 
-real force[ND_ND];				        /* Force on thread obj. */
-real moment[ND_ND];				        /* Moment on thread obj. */
-real cg[ND_ND];					          /* cg on thread obj. */
-real main_rot_thrust_target_init; /* Initial main rotor thrust coeff target. */
+real force[ND_ND];                 /* Force on thread object. */
+real moment[ND_ND];                /* Moment on thread object. */
+real cg[ND_ND];                    /* CG coordinates of thread object. */
+real main_rot_thrust_target_init;  /* Initial main rotor thrust coeff target. */
 
-int ktot;							            /* Number of different airfoiltables read in. */
-char file_name[100][30];			    /* Name of airfoil tables, eg. airfoil.dat*/
-char check_name[100][30];			    /* Name of airfoil, eg. naca0012*/
-char clorcd[100][50][max_rotor_zones];			        /*cl or cd entry*/
-float RE[100][50];				    /*Airfoil Reynolds number*/
-float MA[100][50];				    /*Airfoil Mach number*/
-int itot[100];					      /*Number of entries per .dat file*/
-int jtot[100][50];				    /*Number of aoa entries per set*/
-float aoa[100][50][80];			  /*Angle of attack*/
-float coeff[100][50][80];			/*cl or cd*/
-cxboolean rho_const;          /*true if density const, false otherwise*/
+int ktot;                          /* Number of different airfoil tables read in. */
+char file_name[100][30];           /* Airfoil table filenames, e.g. "airfoil.dat". */
+char check_name[100][30];          /* Airfoil names, e.g. "naca0012". */
+char clorcd[100][50][max_rotor_zones]; /* CL or CD identifier per table entry. */
+float RE[100][50];                 /* Airfoil Reynolds numbers. */
+float MA[100][50];                 /* Airfoil Mach numbers. */
+int itot[100];                     /* Number of entries per .dat file. */
+int jtot[100][50];                 /* Number of AOA entries per set. */
+float aoa[100][50][80];            /* Angle of attack table values. */
+float coeff[100][50][80];          /* CL or CD table values. */
+cxboolean rho_const;               /* TRUE if density is constant, FALSE otherwise. */
 
 /*TUI*/
+real urf_source = 0.5;              /* Under-relaxation factor for source calculation. */
+int  i_start    = 10;               /* Iterations for linear rotor speed ramp-up. */
+real dalpha     = 10.0 * M_PI / 180.0; /* Trimming: Jacobian perturbation angle (rad). */
+real limiter    = 0.1;              /* Max angle change relative to dalpha. */
 
-real urf_source=0.5;				  /* URF for source calculation*/
-int i_start=10;					      /* No iterations for linear rspe ramp up*/
-real dalpha=10.0*M_PI/180.0;	/* Trimming: perturbation angle for Jacobian in deg*/
-real limiter=0.1;				      /* Max. angle change relative to dalpha*/
+char newfilename[256];              /* Filename for reading/writing rotor data. */
+char time_str[100];                 /* Time string for filename tagging. */
+int  hdr = 1;                       /* Output file header flag: 1=write header. */
 
-char newfilename[256];        /* Filename for reading and writing rotor data. */
-char time_str[100];           /* String for time in filename. */  
-/*time_t now;                   Current time for filename. */ 
-int hdr = 1;                  /* Header for writing data file, 1 = on, 0 = off. */ 
-
-int n_r = 15;                         /* Number of ALM nodes.                */
-real sigma_az_old = {0.0}; /* Previous value of sigma_az. */
-real sigma_vert_old = {0.0}; /* Previous value of sigma_vert. */
-real gauss_denom_old = {0.0}; /* Previous value of Gaussian denominator. */
+int  n_r = 15;                       /* Number of ALM nodes. */
+real sigma_az_old = 0.0;    /* Previous value of sigma_az. */
+real sigma_vert_old = 0.0;  /* Previous value of sigma_vert. */
+real gauss_denom_old = 0.0; /* Previous value of Gaussian denominator. */
 int global_cells_ahead_behind_rotor_old[max_rotor_zones] = {0}; /* Previous value of cells ahead/behind rotor. */
 int total_cells_above_rotor_old[max_rotor_zones] = {0}; /* Previous value of cells above/below rotor. */
 
@@ -178,8 +177,7 @@ const char *data_vname[] = {
 /*---------------------------------------------------------------------------*/
 /*                 END GLOBAL INPUT VARIABLES                                */
 /*---------------------------------------------------------------------------*/
-int istflag=1;					/*flag 1 at start
-								       0 after first ADJUST run              */
+int istflag = 1; /* 1 at start; set to 0 after first ADJUST run. */
 /*---------------------------------------------------------------------------*/
 /*                 BEGIN GLOBAL TRIMMING VARIABLES                           */
 /*---------------------------------------------------------------------------*/
@@ -197,13 +195,13 @@ real sldity[max_rotor_zones];
 #if !RP_HOST
   int czon[max_rotor_zones];                      /*Rotor cell zone ID*/
   char factor[max_rotor_zones][30];               /*Memory: Geometry weighting factor*/
-  char xsource[max_rotor_zones][30];				/*Memory: Source x-component*/
-  char ysource[max_rotor_zones][30];				/*Memory: Source y-component*/
-  char zsource[max_rotor_zones][30];				/*Memory: Source z-component*/
+  char xsource[max_rotor_zones][30];        /*Memory: Source x-component*/
+  char ysource[max_rotor_zones][30];        /*Memory: Source y-component*/
+  char zsource[max_rotor_zones][30];        /*Memory: Source z-component*/
 
-  char xsource_old[max_rotor_zones][30];	/*Memory: Source x-component previous timestep UR*/
-  char ysource_old[max_rotor_zones][30];	/*Memory: Source y-component previous timestep UR*/
-  char zsource_old[max_rotor_zones][30];	/*Memory: Source z-component previous timestep UR*/
+  char xsource_old[max_rotor_zones][30];  /*Memory: Source x-component previous timestep UR*/
+  char ysource_old[max_rotor_zones][30];  /*Memory: Source y-component previous timestep UR*/
+  char zsource_old[max_rotor_zones][30];  /*Memory: Source z-component previous timestep UR*/
 #endif
 /*---------------------------------------------------------------------------*/
 /*                 END GLOBAL MEMORY                                         */
@@ -288,198 +286,162 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
 /*---------------------------------------------------------------------------*/
   void my_get_solidity()
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Computes the solidity for each rotor zone.                                */
 /*---------------------------------------------------------------------------*/
   {
-    int i,j;
+    int i, j;
     real area, area_tot;
 
-    /*Loop through all zones*/
-    i=0;
-    while (i < nrtz) {
-      area_tot=0.0;
-	    j=0;
-	    while (j < nsec[i]) {
-        area=0.5*(cout[i][j]+cin[i][j])*(rout[i][j]-rin[i][j])*rrl[i];
-        area_tot=area_tot + area;
-	      j += 1;
-	    }
-
-      /*Below is an error check to ensure no division by zero*/
-      if ((M_PI*rrl[i]*rrl[i]) == 0.0) {
-        Message("Error: Rotor %d radius is undefined.\n",i+1);
-        sldity[i] = 0.0;
-      } 
-      else {
-        sldity[i]=nbld[i]*area_tot/(M_PI*rrl[i]*rrl[i]);
+    for (i = 0; i < nrtz; i++) {
+      area_tot = 0.0;
+      for (j = 0; j < nsec[i]; j++) {
+        area = 0.5 * (cout[i][j] + cin[i][j]) * (rout[i][j] - rin[i][j]) * rrl[i];
+        area_tot += area;
       }
-	    
-	    i += 1;
+
+      if ((M_PI * rrl[i] * rrl[i]) == 0.0) {
+        Message("Error: Rotor %d radius is undefined.\n", i + 1);
+        sldity[i] = 0.0;
+      }
+      else {
+        sldity[i] = nbld[i] * area_tot / (M_PI * rrl[i] * rrl[i]);
+      }
     }
   }
 
 /*---------------------------------------------------------------------------*/
   void my_obtain_cell_id()
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Identifies the fluid cell zone ID for each rotor zone.                    */
 /*---------------------------------------------------------------------------*/
   {
     int i;
-    face_t ff;
-    cell_t cc;
     int fl_zone;
     static int fluid_zone_id = -1;
-    
-    Thread *t; 
-    Domain *domain;
-    domain = Get_Domain(1);
+    Thread *t;
+    Domain *domain = Get_Domain(1);
 
     if (domain == NULL) {
       Message0("Error: Domain is NULL.\n");
-      return; // Exit the function to prevent further execution
+      return;
     }
 
     if (dbg == 1)
-      Message0("%d obtain_cell_id \n",myid);
-    
-    i = 0;
-    fl_zone = 0;
+      Message0("%d obtain_cell_id\n", myid);
 
-    while (i < nrtz){
-      if (fluid_zone_id < 0) { 
-        thread_loop_c(t, domain) { 
-          if (FLUID_THREAD_P(t)) { 
+    fl_zone = 0;
+    for (i = 0; i < nrtz; i++) {
+      if (fluid_zone_id < 0) {
+        thread_loop_c(t, domain) {
+          if (FLUID_THREAD_P(t)) {
             if (fl_zone == 1) {
               Message0("Warning: More than one fluid zone detected. "
-                "Using first detected zone: %d\n", czon[i]); 
+                "Using first detected zone: %d\n", czon[i]);
               continue;
             }
             fl_zone = 1;
-            czon[i] = THREAD_ID(t); 
-            Message0("Fluid zone detected: %d\n", czon[i]); 
-          } 
-        } 
+            czon[i] = THREAD_ID(t);
+            Message0("Fluid zone detected: %d\n", czon[i]);
+          }
+        }
       }
-
-      i += 1;
     }
   }
 
 
 /*---------------------------------------------------------------------------*/
   void my_allocate_memory(char factor[][30], char xsource[][30],
-	  char ysource[][30], char zsource[][30], char xsource_old[][30],
+    char ysource[][30], char zsource[][30], char xsource_old[][30],
     char ysource_old[][30], char zsource_old[][30])
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Allocates per-cell thread memory for force source arrays and initialises  */
+/* the previous-timestep (old) source terms to zero.                         */
 /*---------------------------------------------------------------------------*/
   {
-  
     int i, count, sum_count, local_idx;
     Thread *tc = NULL;
     Domain *domain;
     cell_t cc;
     real *xsource_old_ptr, *ysource_old_ptr, *zsource_old_ptr;
-    
+
     domain = Get_Domain(1);
-    
     if (domain == NULL) {
       Message0("Error: Domain is NULL.\n");
       return;
     }
-  
+
     if (dbg == 1)
-      Message0("%d allocate_memory \n",myid);
-  
+      Message0("%d allocate_memory\n", myid);
+
+    /* Build memory name strings for each rotor zone. */
     for (i = 0; i < max_rotor_zones; i++) {
-        sprintf(factor[i],       "factor%d", i);
-        sprintf(xsource[i],      "xsource%d", i);
-        sprintf(ysource[i],      "ysource%d", i);
-        sprintf(zsource[i],      "zsource%d", i);
-        sprintf(xsource_old[i],  "xsource_old%d", i);
-        sprintf(ysource_old[i],  "ysource_old%d", i);
-        sprintf(zsource_old[i],  "zsource_old%d", i);
+      sprintf(factor[i],      "factor%d",      i);
+      sprintf(xsource[i],     "xsource%d",     i);
+      sprintf(ysource[i],     "ysource%d",     i);
+      sprintf(zsource[i],     "zsource%d",     i);
+      sprintf(xsource_old[i], "xsource_old%d", i);
+      sprintf(ysource_old[i], "ysource_old%d", i);
+      sprintf(zsource_old[i], "zsource_old%d", i);
     }
-  
-    i=0;
-    while (i < nrtz) {
+
+    /* Allocate per-cell arrays for each rotor zone. */
+    for (i = 0; i < nrtz; i++) {
       tc = Lookup_Thread(domain, czon[i]);
-  
       if (tc == NULL) {
         Message0("Error: tc is NULL in my_allocate_memory\n");
         return;
       }
-  
+
       count = 0;
-      begin_c_loop_int(cc,tc)
+      begin_c_loop_int(cc, tc)
         count++;
-      end_c_loop_int(cc,tc)
+      end_c_loop_int(cc, tc)
 
-  	  sum_count = PRF_GISUM1(count);
-  
-      if (dbg == 1){
-        Message0("  %d Rotor %d: Number of cells in volume=%d "
-          "on this node =%d\n", myid, i+1, sum_count, count);
-      }
+      sum_count = PRF_GISUM1(count);
+      if (dbg == 1)
+        Message0("  %d Rotor %d: cells in volume = %d (on this node = %d)\n",
+          myid, i + 1, sum_count, count);
 
-      Alloc_Thread_Memory(tc,factor[i],sizeof(real)*count);
-      Alloc_Thread_Memory(tc,xsource[i],sizeof(real)*count);
-      Alloc_Thread_Memory(tc,ysource[i],sizeof(real)*count);
-      Alloc_Thread_Memory(tc,zsource[i],sizeof(real)*count);
-  
-      Alloc_Thread_Memory(tc,xsource_old[i],sizeof(real)*count);
-      Alloc_Thread_Memory(tc,ysource_old[i],sizeof(real)*count);
-      Alloc_Thread_Memory(tc,zsource_old[i],sizeof(real)*count);
-  
-      i += 1;
+      Alloc_Thread_Memory(tc, factor[i],      sizeof(real) * count);
+      Alloc_Thread_Memory(tc, xsource[i],     sizeof(real) * count);
+      Alloc_Thread_Memory(tc, ysource[i],     sizeof(real) * count);
+      Alloc_Thread_Memory(tc, zsource[i],     sizeof(real) * count);
+      Alloc_Thread_Memory(tc, xsource_old[i], sizeof(real) * count);
+      Alloc_Thread_Memory(tc, ysource_old[i], sizeof(real) * count);
+      Alloc_Thread_Memory(tc, zsource_old[i], sizeof(real) * count);
     }
-  
-  
-    /*Initialize old timestep for source terms*/
-    /*if (istflag == 1)
-      {*/
-    i=0;
-    while (i < nrtz) {
+
+    /* Initialise old-timestep source arrays to zero. */
+    for (i = 0; i < nrtz; i++) {
       tc = Lookup_Thread(domain, czon[i]);
-  
       if (tc == NULL) {
-        Message0("Error: tc is NULL in my_allocate_memory\n");
+        Message0("Error: tc is NULL in my_allocate_memory (init pass)\n");
         return;
       }
-  
+
       xsource_old_ptr = Get_Thread_Memory(tc, xsource_old[i]);
       ysource_old_ptr = Get_Thread_Memory(tc, ysource_old[i]);
       zsource_old_ptr = Get_Thread_Memory(tc, zsource_old[i]);
 
       if (!xsource_old_ptr || !ysource_old_ptr || !zsource_old_ptr) {
-          Message0("Error: NULL source pointer in my_allocate_memory\n");
-          continue;
+        Message0("Error: NULL old-source pointer in my_allocate_memory\n");
+        continue;
       }
-  
+
       local_idx = 0;
-      begin_c_loop_int(cc,tc)
-        xsource_old_ptr[local_idx]=0.0;
-        ysource_old_ptr[local_idx]=0.0;
-        zsource_old_ptr[local_idx]=0.0;
+      begin_c_loop_int(cc, tc)
+        xsource_old_ptr[local_idx] = 0.0;
+        ysource_old_ptr[local_idx] = 0.0;
+        zsource_old_ptr[local_idx] = 0.0;
         local_idx++;
-      end_c_loop_int(cc,tc)
-  
-      i += 1;
+      end_c_loop_int(cc, tc)
     }
   }
 
 /*---------------------------------------------------------------------------*/
   void my_geom_factor()
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Computes the geometric weighting factor for each cell in each rotor zone. */
 /*---------------------------------------------------------------------------*/
   {
     int i, local_indx;
@@ -487,51 +449,48 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
     cell_t cc;
     real xrc[ND_ND], rc;
     real *area_ptr;
-  
-    Domain *domain = Get_Domain(1);
 
+    Domain *domain = Get_Domain(1);
     if (domain == NULL) {
       Message0("Error: Domain is NULL.\n");
       return;
     }
-  
+
     if (dbg == 1)
-      Message0("%d geom_factor \n",myid);
-  
+      Message0("%d geom_factor\n", myid);
+
     for (i = 0; i < nrtz; i++) {
-      tc = Lookup_Thread(domain,czon[i]);
-  
+      tc = Lookup_Thread(domain, czon[i]);
       if (tc == NULL) {
-        Message0("Error: tc is NULL in my_geom_factor (Rotor %d)\n", i+1);
+        Message0("Error: tc is NULL in my_geom_factor (Rotor %d)\n", i + 1);
         continue;
       }
-      
-      area_ptr = Get_Thread_Memory(tc,factor[i]);
+
+      area_ptr = Get_Thread_Memory(tc, factor[i]);
       if (area_ptr == NULL) {
-        Message0("Error: area_ptr is NULL in my_geom_factor (Rotor %d)\n", i+1);
+        Message0("Error: area_ptr is NULL in my_geom_factor (Rotor %d)\n", i + 1);
         continue;
       }
-  
+
       local_indx = 0;
-      begin_c_loop_int(cc,tc)
-  	    C_CENTROID(xrc,cc,tc);
+      begin_c_loop_int(cc, tc)
+        C_CENTROID(xrc, cc, tc);
 
         /* Distance from rotor disk origin. */
-        rc = sqrt((xrc[0]-dskco[i][0])*(xrc[0]-dskco[i][0]) +
-                  (xrc[1]-dskco[i][1])*(xrc[1]-dskco[i][1]) +
-                  (xrc[2]-dskco[i][2])*(xrc[2]-dskco[i][2]));
-  
-        /* Avoid division by zero*/
+        rc = sqrt((xrc[0] - dskco[i][0]) * (xrc[0] - dskco[i][0]) +
+                  (xrc[1] - dskco[i][1]) * (xrc[1] - dskco[i][1]) +
+                  (xrc[2] - dskco[i][2]) * (xrc[2] - dskco[i][2]));
+
         if (rc <= 1e-12) {
-          Message0("Error: Rotor %d origin coincides with cell centroid.\n", i+1);
+          Message0("Error: Rotor %d origin coincides with cell centroid.\n", i + 1);
           area_ptr[local_indx] = 0.0;
         }
         else {
-          area_ptr[local_indx] = ((real) nbld[i]) * ((rrl[i] * rrl[i]) / 
-                                 (n_r * n_r)) / (2.0 * M_PI * rc);
+          area_ptr[local_indx] = ((real)nbld[i]) * ((rrl[i] * rrl[i]) /
+                                  (n_r * n_r)) / (2.0 * M_PI * rc);
         }
-  	    local_indx++;
-      end_c_loop_int(cc,tc) 
+        local_indx++;
+      end_c_loop_int(cc, tc)
     }
   }
 
@@ -541,30 +500,21 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
     real trdf_co[], real trdf_cy[],
     int up_co[], int up_cy[])
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Initialises trimming update frequencies and damping factors.              */
 /*---------------------------------------------------------------------------*/
   {
     int i;
-  
+
     if (dbg == 1)
-      Message0("%d start_trimming \n",myid);
-  
-   /*Set update frequencies and damping factors for cyclic and colective as
-      same*/
-    i=0;
-    while (i < nrtz) {
-      trufq_co[i]=trufq[i];
-      trufq_cy[i]=trufq[i];
-  
-      trdf_co[i]=trdf[i];
-      trdf_cy[i]=trdf[i];
-  
-      up_co[i]=trufq_co[i];
-      up_cy[i]=trufq_cy[i];
-  
-      i += 1;
+      Message0("%d start_trimming\n", myid);
+
+    for (i = 0; i < nrtz; i++) {
+      trufq_co[i] = trufq[i];
+      trufq_cy[i] = trufq[i];
+      trdf_co[i]  = trdf[i];
+      trdf_cy[i]  = trdf[i];
+      up_co[i]    = trufq_co[i];
+      up_cy[i]    = trufq_cy[i];
     }
   }
 
@@ -574,85 +524,69 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
 /*---------------------------------------------------------------------------*/
   void my_read_in_airfoil_tables()
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Reads CL/CD polars from .dat files for each airfoil type.                 */
+/* Expects AOA entries ordered from -180 to +180 degrees.                    */
 /*---------------------------------------------------------------------------*/
   {
     FILE *f_ptr;
     int i, j, k;
-  
+
     if (dbg == 1) {
-      Message("\n read_in_airfoil_tables \n");
-      Message("     -180 < AOA < 180 \n");
+      Message("\n read_in_airfoil_tables\n");
+      Message("     -180 < AOA < 180\n");
     }
-  
-    k=0;
-    while (k < ktot) {
-  	  f_ptr = fopen(file_name[k],"r");
-      fscanf(f_ptr,"%s \n",check_name[k]);
-      fscanf(f_ptr,"%d \n",&itot[k]);
-  
-      if(f_ptr == NULL) {
-      	Message("\nNull file pointer\n");
-      	continue;
-  	  }
-      i=0;
-      while (i < itot[k])	{
-        fscanf(f_ptr,"%s \n",clorcd[k][i]);
-        fscanf(f_ptr,"%f \n",&RE[k][i]);
-        fscanf(f_ptr,"%f \n",&MA[k][i]);
-        fscanf(f_ptr,"%d \n",&jtot[k][i]);
-  
-        j=0;
-        while (j < jtot[k][i]) {
-          fscanf(f_ptr,"%f %f \n",&aoa[k][i][j], &coeff[k][i][j]);
-          j+=1;
-  	    }
-  
-  	    j=1;
-        while (j < jtot[k][i]) {
-          if(aoa[k][i][j-1] > aoa[k][i][j])
+
+    for (k = 0; k < ktot; k++) {
+      f_ptr = fopen(file_name[k], "r");
+      if (f_ptr == NULL) {
+        Message("\nNull file pointer for %s\n", file_name[k]);
+        continue;
+      }
+
+      fscanf(f_ptr, "%s\n", check_name[k]);
+      fscanf(f_ptr, "%d\n", &itot[k]);
+
+      for (i = 0; i < itot[k]; i++) {
+        fscanf(f_ptr, "%s\n",  clorcd[k][i]);
+        fscanf(f_ptr, "%f\n",  &RE[k][i]);
+        fscanf(f_ptr, "%f\n",  &MA[k][i]);
+        fscanf(f_ptr, "%d\n",  &jtot[k][i]);
+
+        for (j = 0; j < jtot[k][i]; j++)
+          fscanf(f_ptr, "%f %f\n", &aoa[k][i][j], &coeff[k][i][j]);
+
+        /* Verify AOA entries are in ascending order. */
+        for (j = 1; j < jtot[k][i]; j++) {
+          if (aoa[k][i][j - 1] > aoa[k][i][j])
             Message("ERROR: Airfoil table entries must be ordered with "
-              "increasing AOA \n");
-  	      
-          j+=1;
-  	    }
-  
-  	    j=0;
-        while (j < jtot[k][i]) {
-          if (strcmp(clorcd[k][i],"cd") == 0)	{
-  	        /*Message("  %s \n",clorcd[k][i]);*/
-            if(coeff[k][i][j] < 0.0)
-              Message("WARNING: Are you sure that cd is negative in %s, "
-                "AOA %f ? \n", check_name[k], aoa[k][i][j]);
+              "increasing AOA\n");
+        }
+
+        /* Sanity-check CL/CD signs. */
+        for (j = 0; j < jtot[k][i]; j++) {
+          if (strcmp(clorcd[k][i], "cd") == 0) {
+            if (coeff[k][i][j] < 0.0)
+              Message("WARNING: CD is negative in %s at AOA %f?\n",
+                check_name[k], aoa[k][i][j]);
           }
-  
-          if (strcmp(clorcd[k][i],"cl") == 0) {
-  	        /*Message("  %s \n",clorcd[k][i]);*/
-  		      if(aoa[k][i][j] < -90.0 &&  coeff[k][i][j] < 0.0)
-              Message("WARNING: Are you sure that cl is negative in %s, "
-                "AOA %f ? \n", check_name[k], aoa[k][i][j]);
-  
-  		      if(aoa[k][i][j] > 90.0 &&  coeff[k][i][j] > 0.0)
-              Message("WARNING: Are you sure that cl is positive in %s, "
-                "AOA %f ? \n", check_name[k], aoa[k][i][j]);
-  
-            if(aoa[k][i][j] <= 90.0 && aoa[k][i][j] >= 0.0 && coeff[k][i][j] < 0.0)
-              Message("WARNING: Are you sure that cl is negative in %s, AOA %f ? \n",
-  	            check_name[k],aoa[k][i][j]);
-  
-            if(aoa[k][i][j] >= -90.0 && aoa[k][i][j] < 0.0 && coeff[k][i][j] > 0.0)
-              Message("WARNING: Are you sure that cl is positive in %s, AOA %f ? \n",
-  	            check_name[k],aoa[k][i][j]);
-  		    }
-  	      j+=1;
-  	    }
-  	    i+=1;
-  	  }
-      k+=1;
+          if (strcmp(clorcd[k][i], "cl") == 0) {
+            if (aoa[k][i][j] < -90.0 && coeff[k][i][j] < 0.0)
+              Message("WARNING: CL is negative in %s at AOA %f?\n",
+                check_name[k], aoa[k][i][j]);
+            if (aoa[k][i][j] > 90.0 && coeff[k][i][j] > 0.0)
+              Message("WARNING: CL is positive in %s at AOA %f?\n",
+                check_name[k], aoa[k][i][j]);
+            if (aoa[k][i][j] >= 0.0 && aoa[k][i][j] <= 90.0 && coeff[k][i][j] < 0.0)
+              Message("WARNING: CL is negative in %s at AOA %f?\n",
+                check_name[k], aoa[k][i][j]);
+            if (aoa[k][i][j] >= -90.0 && aoa[k][i][j] < 0.0 && coeff[k][i][j] > 0.0)
+              Message("WARNING: CL is positive in %s at AOA %f?\n",
+                check_name[k], aoa[k][i][j]);
+          }
+        }
+      }
+      fclose(f_ptr);
     }
-    fclose(f_ptr);
   }
   
 #endif
@@ -660,14 +594,14 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
 #if !RP_HOST
 /*---------------------------------------------------------------------------*/
   void my_get_radial_position(int i, cell_t cc, Thread *tc, int count,
-    real *r_pb_ptr, real *psi_pb_ptr, real *r_pb2_ptr, 
-    real *x_pb_ptr, real *y_pb_ptr, real *z_pb_ptr, int *rotor_cell, 
-    real *r_total, real *xx, real *yy, real *zz, real *beta_pb_ptr, 
+    real *r_pb_ptr, real *psi_pb_ptr, real *r_pb2_ptr,
+    real *x_pb_ptr, real *y_pb_ptr, real *z_pb_ptr, int *rotor_cell,
+    real *r_total, real *xx, real *yy, real *zz, real *beta_pb_ptr,
     real *dpitc, real *dpits, real *dbanc, real *dbans)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Transforms the global cell centroid position into rotor-disc coordinates  */
+/* and returns normalised radius, azimuth, vertical angle, and trig values.  */
+/* Sets *rotor_cell = 0 if the cell is outside the rotor influence region.   */
 /*---------------------------------------------------------------------------*/
   {
     real xrc[ND_ND];
@@ -746,37 +680,22 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
 
 
 /*---------------------------------------------------------------------------*/
-/*---------------------------------------------------------------------------*/
-/*  my_vel_xyz_to_blade                                                      */
-/*                                                                           */
-/*  Purpose:                                                                 */
-/*    Transforms the velocity components from the global XYZ coordinate       */
-/*    system to the local blade coordinate system for a given rotor cell.     */
-/*                                                                           */
-/*  Parameters:                                                              */
-/*    int i                - Rotor index                                     */
-/*    cell_t cc            - Cell pointer                                    */
-/*    Thread *tc           - Thread pointer                                  */
-/*    int count            - Cell count (for debug/iteration)                */
-/*    real psi_pb          - Azimuthal angle in pitch/bank plane (rad)       */
-/*    real r_pb2           - Radial distance in rotor plane                  */
-/*    real *Usc_ptr        - Pointer to store radial velocity in blade frame */
-/*    real *Utc_ptr        - Pointer to store tangential velocity in blade   */
-/*    real *Unc_ptr        - Pointer to store normal velocity in blade frame */
-/*    real *aeps_ptr       - Pointer to store angle epsilon                  */
-/*    real *Utotal_ptr     - Pointer to store total velocity                 */
-/*    real *beta_ptr       - Pointer to store flapping angle                 */
-/*---------------------------------------------------------------------------*/
   void my_vel_xyz_to_blade(int i, cell_t cc, Thread *tc, int count,
     real psi_pb, real r_pb2,
     real *Usc_ptr, real *Utc_ptr, real *Unc_ptr,
-    real *aeps_ptr, real *Utotal_ptr, real *beta_ptr, 
+    real *aeps_ptr, real *Utotal_ptr, real *beta_ptr,
     real dpitc, real dpits, real dbanc, real dbans,
     real *psi_pbs, real *psi_pbc, real *betac, real *betas)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Transforms global-frame velocities into the local blade-frame and         */
+/* computes the total 2D velocity and inflow angle at the blade section.     */
+/*                                                                           */
+/*   Usc   - radial velocity in blade frame                                  */
+/*   Utc   - tangential velocity in blade frame                              */
+/*   Unc   - normal (out-of-plane) velocity in blade frame                   */
+/*   aeps  - inflow angle epsilon (rad)                                      */
+/*   Utotal - total local 2D velocity (tangential + normal)                  */
+/*   beta  - total flapping angle (rad)                                      */
 /*---------------------------------------------------------------------------*/
   {
     real Ux, Uy, Uz;
@@ -785,206 +704,142 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
     real beta;
     real tmp, tmp1, Utc, Unc, aeps;
     real Ut_omega, Ut_total, Utotal;
-    int i_count;
-    real tmp2, tmp3, tmp4;
-  
+
     if (count == 0 && dbg == 1)
-        Message0("  %d Rotor %d - vel_xyz_to_blade \n", myid, i+1);
-  
-    /* Flow-field velocities in x y z coordinates*/
-    Ux = C_U(cc,tc);
-    Uy = C_V(cc,tc);
-    Uz = C_W(cc,tc);
-  
-    /* Flow-field Velocities in pitch/bank plane*/
-    Ux_pb = Ux*dpitc - Uz*dpits;
-    Uy_pb = Ux*dpits*dbans + Uy*dbanc + Uz*dpitc*dbans;
-    Uz_pb = Ux*dpits*dbanc - Uy*dbans + Uz*dpitc*dbanc;
-  
-    /* Azimuth angle, psi, components. */
+      Message0("  %d Rotor %d - vel_xyz_to_blade\n", myid, i + 1);
+
+    /* Flow-field velocities in global x, y, z. */
+    Ux = C_U(cc, tc);
+    Uy = C_V(cc, tc);
+    Uz = C_W(cc, tc);
+
+    /* Velocities transformed into the pitch/bank plane. */
+    Ux_pb = Ux * dpitc - Uz * dpits;
+    Uy_pb = Ux * dpits * dbans + Uy * dbanc + Uz * dpitc * dbans;
+    Uz_pb = Ux * dpits * dbanc - Uy * dbans + Uz * dpitc * dbanc;
+
+    /* Azimuth angle components. */
     *psi_pbs = sin(psi_pb);
     *psi_pbc = cos(psi_pb);
-  
+
     /* Radial and tangential velocities in rotor plane. */
-    Ur_pb = Ux_pb*(*psi_pbc)  + Uy_pb*(*psi_pbs);
-    Ut_pb = -Ux_pb*(*psi_pbs) + Uy_pb*(*psi_pbc);
-  
-    /* Total flapping angle in pitch/bank angle. */
-    beta = bflco[i] - bflc[i]*(*psi_pbc) - bfls[i]*(*psi_pbs);
-  
-    if(isnan(beta)) {
-      Message0("Error: Rotor %d beta returns NaN.\n",i+1);
-    }
-    
+    Ur_pb =  Ux_pb * (*psi_pbc) + Uy_pb * (*psi_pbs);
+    Ut_pb = -Ux_pb * (*psi_pbs) + Uy_pb * (*psi_pbc);
+
+    /* Total flapping angle. */
+    beta = bflco[i] - bflc[i] * (*psi_pbc) - bfls[i] * (*psi_pbs);
+    if (isnan(beta))
+      Message0("Error: Rotor %d beta returns NaN.\n", i + 1);
     *beta_ptr = beta;
+
     /* Flapping angle components. */
-    *betas = sin(beta); 
+    *betas = sin(beta);
     *betac = cos(beta);
 
+    /* Sign convention: +1 for negative rotation direction, -1 for positive. */
     tmp1 = 0.0;
-    if(rspe[i] > 0.0)
-      tmp1 = -1.0;
-    else if(rspe[i] < 0.0)
-      tmp1 = 1.0;
-  
-    /* Radial, tangential, and normal velocities in flapping plane. */
-    tmp = Ur_pb * (*betac) + Uz_pb * (*betas);
-    *Usc_ptr = tmp;
-    Utc =              tmp1 * Ut_pb;
-    *Utc_ptr = Utc;
-    Unc = -Ur_pb * (*betas)         + Uz_pb * (*betac);
-    *Unc_ptr = Unc;
-  
-    i_count = N_ITER;
-    /* From rad/s to m/s. */
-    if(i_count >= i_start) {
-      /* After first 10 iterations, rotor speed is as defined. */
-  	  Ut_omega = fabs(rspe[i]) * r_pb2;
-    }
-    else {
-      /* Rotor speed gradually ramps up to stabilise simulations in first 10 
-        iterations. */
-      tmp2 = i_count;
-  	  tmp3 = i_start;
-  	  tmp4 = tmp2/tmp3;
-  	  Ut_omega = fabs(rspe[i]) * r_pb2 * tmp4;
-    }
-  
-    /* Rotor speed + local tangential velocity. */
-    Ut_total = Ut_omega + Utc;
+    if      (rspe[i] > 0.0) tmp1 = -1.0;
+    else if (rspe[i] < 0.0) tmp1 =  1.0;
 
-    /* Total local 2D (tangential and normal) velocity. */
-    Utotal = sqrt(Ut_total * Ut_total + Unc * Unc);
+    /* Radial, tangential, and normal velocities in flapping plane. */
+    tmp       = Ur_pb * (*betac) + Uz_pb * (*betas);
+    *Usc_ptr  = tmp;
+    Utc       = tmp1 * Ut_pb;
+    *Utc_ptr  = Utc;
+    Unc       = -Ur_pb * (*betas) + Uz_pb * (*betac);
+    *Unc_ptr  = Unc;
+
+    /* Rotor tangential speed (m/s), ramped up linearly over i_start iters. */
+    if (N_ITER >= i_start)
+      Ut_omega = fabs(rspe[i]) * r_pb2;
+    else
+      Ut_omega = fabs(rspe[i]) * r_pb2 * ((real)N_ITER / (real)i_start);
+
+    /* Total tangential velocity and resultant 2D velocity. */
+    Ut_total  = Ut_omega + Utc;
+    Utotal    = sqrt(Ut_total * Ut_total + Unc * Unc);
     *Utotal_ptr = Utotal;
-  
-    /* Angle epsilon. */
-    aeps = atan2(Unc,fabs(Ut_total));
+
+    /* Inflow angle epsilon, wrapped to [-pi, pi]. */
+    aeps = atan2(Unc, fabs(Ut_total));
+    if      (aeps < -M_PI) aeps += 2.0 * M_PI;
+    else if (aeps >  M_PI) aeps -= 2.0 * M_PI;
     *aeps_ptr = aeps;
-    if(aeps < -M_PI)
-      *aeps_ptr = 2.0*M_PI+aeps;
-    if(aeps > M_PI)
-      *aeps_ptr = aeps - 2.0*M_PI;
-  
   }
 
 /*---------------------------------------------------------------------------*/
   void my_get_pitch(int i, cell_t cc, Thread *tc, int count, real r_pb,
-	  real psi_pb, real *theta_ptr, real psi_pbs, real psi_pbc)
+    real psi_pb, real *theta_ptr, real psi_pbs, real psi_pbc)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Computes the total blade pitch angle at the given normalised radius,      */
+/* including collective, cyclic, and linearly-interpolated twist.            */
 /*---------------------------------------------------------------------------*/
   {
     int j;
     real theta, tmp;
-  
-    /*Twist*/
-    /*Assumed to be linear between blade section*/
-    /*Loop through all blade sections*/
 
-    j=0;
-    while (j < nsec[i]) {
-  	  if (r_pb > rout[i][j])
-        j += 1;
-  	  else if (r_pb > rin[i][j]) {
-        break;
-  	  }
-  	  else
-  		  Message("ERROR: Blade section radius not found. \n");
+    /* Find the blade section containing r_pb (linear interpolation of twist). */
+    for (j = 0; j < nsec[i]; j++) {
+      if      (r_pb > rout[i][j]) continue;
+      else if (r_pb > rin[i][j])  break;
+      else    Message("ERROR: Blade section radius not found.\n");
     }
-      
-    if ((rout[i][j]-rin[i][j]) == 0) {
-      /*Message("Error: Rotor %d radial section %d is undefined.\n",i+1,j);*/
+
+    if ((rout[i][j] - rin[i][j]) == 0.0)
       tmp = 0.0;
-    }
-    else {
-      tmp = twst[i][j]+(twst[i][j+1]-twst[i][j])/(rout[i][j]-rin[i][j])*
-      (r_pb-rin[i][j]);
-    }
+    else
+      tmp = twst[i][j] + (twst[i][j + 1] - twst[i][j]) /
+            (rout[i][j] - rin[i][j]) * (r_pb - rin[i][j]);
 
-    theta = bcop[i] + tmp - bcyc[i]*psi_pbc - bcys[i]*psi_pbs;
+    theta = bcop[i] + tmp - bcyc[i] * psi_pbc - bcys[i] * psi_pbs;
+
+    /* Wrap to (-pi, pi]. */
+    if      (theta < -M_PI) theta += 2.0 * M_PI;
+    else if (theta >  M_PI) theta -= 2.0 * M_PI;
     *theta_ptr = theta;
-    
-    /*-pi < theta < pi*/
-    if(theta < -M_PI)
-      *theta_ptr = 2.0  *M_PI + theta;
-    if(theta > M_PI)
-      *theta_ptr = theta - 2.0 * M_PI;
   }
 
 
 /*---------------------------------------------------------------------------*/
   void my_get_chord_alm_area(int i, cell_t cc, Thread *tc, int count, real r_pb,
-	  real *chord_ptr)
+    real *chord_ptr)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Returns the linearly interpolated chord length at normalised radius r_pb. */
 /*---------------------------------------------------------------------------*/
   {
     int j;
-  
-    if(count == 0) {
-      if (dbg == 1)
-        Message0("  %d Rotor %d - get_chord \n",myid,i+1);
+
+    if (count == 0 && dbg == 1)
+      Message0("  %d Rotor %d - get_chord\n", myid, i + 1);
+
+    /* Find section and interpolate chord linearly. */
+    for (j = 0; j < nsec[i]; j++) {
+      if      (r_pb > rout[i][j]) continue;
+      else if (r_pb > rin[i][j])  break;
+      else    Message("ERROR: Blade section radius not found.\n");
     }
-  
-    /*Chord*/
-    /*Assumed to be linear per blade section*/
-    /*Loop through all blade sections*/
-    j=0;
-    while (j < nsec[i]) {
-  	  if (r_pb > rout[i][j])
-        j += 1;
-  	  else if (r_pb > rin[i][j]) {
-  		  /*Message("%f %f %f \n",rin[i][j],r_pb,rout[i][j]);*/
-        break;
-  	  }
-  	  else
-  		  Message("ERROR: Blade section radius not found. \n");
-    }
-  
-    if ((rout[i][j]-rin[i][j]) == 0.0) {
-      /*Message("Error: Rotor %d chord at section %d is zero.\n", i+1,j);*/
+
+    if ((rout[i][j] - rin[i][j]) == 0.0)
       *chord_ptr = 0.0;
-    } 
-    else {
-      *chord_ptr = cin[i][j] + (cout[i][j] - cin[i][j]) / (rout[i][j] - rin[i][j])*
-        (r_pb - rin[i][j]);
-    }
-  
-    /*Message("%f %f %f | %f %f %f \n",rin[i][j],r_pb,rout[i][j],
-  	       cin[i][j],chord,cout[i][j]);*/
+    else
+      *chord_ptr = cin[i][j] + (cout[i][j] - cin[i][j]) /
+                  (rout[i][j] - rin[i][j]) * (r_pb - rin[i][j]);
   }
 
 /*---------------------------------------------------------------------------*/
-  void my_get_re(int i, cell_t cc, Thread *tc, int count, real chord, 
+  void my_get_re(int i, cell_t cc, Thread *tc, int count, real chord,
     real Utotal, real *Re_t_ptr)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Computes the local Reynolds number at the blade section.                  */
 /*---------------------------------------------------------------------------*/
   {
-  
-    if(count == 0) {
-      if (dbg == 1)
-        Message0("  %d Rotor %d - get_re \n",myid,i+1);
-    }
-  
-  /*C_MU_L(cc,tc) laminar viscosity (in properies panel)
-  C_MU_T(cc,tc) turbulent viscosity (computed using turbulence model)
-  C_MU_EFF(cc,tc) effective viscosity (sum of laminar and turbulent)
-  C_R(cc,tc) density*/
-  /*Message("mul %f mut %f mueff %f rho %f \n",
-  		C_MU_L(cc,tc), C_MU_T(cc,tc), C_MU_EFF(cc,tc), C_R(cc,tc));*/
-  
-  
+    if (count == 0 && dbg == 1)
+      Message0("  %d Rotor %d - get_re\n", myid, i + 1);
+
     if (C_MU_L(cc, tc) == 0.0) {
       Message("Error: Laminar viscosity is zero.\n");
       *Re_t_ptr = 0.0;
-    } 
+    }
     else {
       *Re_t_ptr = Utotal * chord * C_R(cc, tc) / C_MU_L(cc, tc);
     }
@@ -993,72 +848,57 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
 
 /*---------------------------------------------------------------------------*/
   void my_get_ma(int i, cell_t cc, Thread *tc, int count, real Utotal,
-	  real *Ma_t_ptr)
+    real *Ma_t_ptr)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Computes the local Mach number. Returns 0.2 for constant-density cases.  */
 /*---------------------------------------------------------------------------*/
   {
     real kappa;
-  
-  
-  /*Message("R %f cp %f \n",C_RGAS(cc,tc), C_CP(cc,tc));*/
-  
+
     if (rho_const) {
-  	  *Ma_t_ptr= 0.2;
-      /*Message("rho is const");*/
+      *Ma_t_ptr = 0.2;
     }
     else {
-      if ((C_CP(cc,tc) - C_RGAS(cc,tc)) == 0.0) {
-        Message("Error: kappa for rotor %d is zero.\n",i+1);
+      if ((C_CP(cc, tc) - C_RGAS(cc, tc)) == 0.0) {
+        Message("Error: gamma for rotor %d is undefined (zero denominator).\n", i + 1);
         kappa = 0.0;
-      } 
-      else {
-        kappa=C_CP(cc,tc) / (C_CP(cc,tc) - C_RGAS(cc,tc));
       }
-      if ((sqrt(kappa*C_RGAS(cc,tc)*C_T(cc,tc))) == 0.0) {
-        Message("Error: Mach no for rotor %d is zero.\n",i+1);
+      else {
+        kappa = C_CP(cc, tc) / (C_CP(cc, tc) - C_RGAS(cc, tc));
+      }
+
+      if (sqrt(kappa * C_RGAS(cc, tc) * C_T(cc, tc)) == 0.0) {
+        Message("Error: Speed of sound for rotor %d is zero.\n", i + 1);
         *Ma_t_ptr = 0.0;
-      } 
-      else {
-        *Ma_t_ptr=Utotal/(sqrt(kappa*C_RGAS(cc,tc)*C_T(cc,tc)));
       }
-      
-      /*Message("rho is ideal gas");*/
+      else {
+        *Ma_t_ptr = Utotal / sqrt(kappa * C_RGAS(cc, tc) * C_T(cc, tc));
+      }
     }
   }
 
 
 /*---------------------------------------------------------------------------*/
   void my_get_aoa(int i, cell_t cc, Thread *tc, int count, real aeps,
-	  real theta, real *alpha_t_ptr)
+    real theta, real *alpha_t_ptr)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Computes the local angle of attack as epsilon + theta.                    */
 /*---------------------------------------------------------------------------*/
   {
-  
-    *alpha_t_ptr=aeps+theta;
-  
-    if(isnan(*alpha_t_ptr)) {
-      if(i==1) {
-        if(errchk !=1) {
-          Message0("Warning, *alpha_t_ptr returns NaN at iter %d \n",count);
-          errchk=1;
-        }
-      }
+    *alpha_t_ptr = aeps + theta;
+
+    if (isnan(*alpha_t_ptr) && i == 1 && errchk != 1) {
+      Message0("Warning: alpha_t returns NaN at iter %d\n", count);
+      errchk = 1;
     }
   }
 
 /*---------------------------------------------------------------------------*/
   void my_get_cl(int i, cell_t cc, Thread *tc, int count, real r_pb,
-	  real Ma_t, real Re_t, real alpha_t, real *CL_ptr)
+    real Ma_t, real Re_t, real alpha_t, real *CL_ptr)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Looks up and interpolates the lift coefficient from the airfoil tables    */
+/* for the local Reynolds number, Mach number, and angle of attack.          */
 /*---------------------------------------------------------------------------*/
   {
     int j,k,it,jt;
@@ -1069,7 +909,7 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
     int iflag;
     real cl_m = 0, cl_p = 0;
   
-    rfac=0.5;		/*0 --> cl=clma, 1 --> cl=clre*/
+    rfac=0.5;   /*0 --> cl=clma, 1 --> cl=clre*/
   
     /*Re_t=90000;*/
     /*Ma_t=0.96;*/
@@ -1091,14 +931,14 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
     j=0;
     iflag=0;
     while (j < nsec[i]) {
-  	  if (r_pb > rout[i][j])
+      if (r_pb > rout[i][j])
         j += 1;
-  	  else if (r_pb > rin[i][j]) {
-  		  /*Message("%f %f %f \n",rin[i][j],r_pb,rout[i][j]);*/
+      else if (r_pb > rin[i][j]) {
+        /*Message("%f %f %f \n",rin[i][j],r_pb,rout[i][j]);*/
         break;
-  	  }
-  	  else
-  		  Message("ERROR: Blade section radius not found. \n");
+      }
+      else
+        Message("ERROR: Blade section radius not found. \n");
     }
   
     /*Message("%f %f %f %s \n",rin[i][j],r_pb,rout[i][j],type[i][j]);*/
@@ -1106,49 +946,42 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
     k=0;
     while (k < ktot) {
       if (strcmp(check_name[k], type[i][j]) == 0 ||
-  		  strcmp(check_name[k], type[i][j+1]) == 0) {
-  	    /*Message("  check %s type %s \n",check_name[k], type[i][j]);*/
+        strcmp(check_name[k], type[i][j+1]) == 0) {
+        /*Message("  check %s type %s \n",check_name[k], type[i][j]);*/
         /*Message("  %d \n",itot[k]);*/
   
         it=0;
         while (it < itot[k]) {
           if (strcmp(clorcd[k][it],"cl") == 0) {
-  			    /*Message("  %s \n",clorcd[k][it]);*/
+            /*Message("  %s \n",clorcd[k][it]);*/
             if (RE[k][it] < Re_min) {
-  			      Re_min=RE[k][it];
-  			      ire_min=it;
-  			    }
+              Re_min=RE[k][it];
+              ire_min=it;
+            }
             if (RE[k][it] > Re_max) {
-  			      Re_max=RE[k][it];
-  			      ire_max=it;
-  			    }
-            if (MA[k][it] < Ma_min)	{
-  			      Ma_min=MA[k][it];
-  			      ima_min=it;
-  			    }
-            if (MA[k][it] > Ma_max)	{
-  			      Ma_max=MA[k][it];
-  			      ima_max=it;
-  			    }
-  		    }
+              Re_max=RE[k][it];
+              ire_max=it;
+            }
+            if (MA[k][it] < Ma_min) {
+              Ma_min=MA[k][it];
+              ima_min=it;
+            }
+            if (MA[k][it] > Ma_max) {
+              Ma_max=MA[k][it];
+              ima_max=it;
+            }
+          }
           it+=1;
         }
   
-        /*Message("Re_min %f Re_t %f Re_max %f \n",Re_min,Re_t,Re_max);*/
-        /*Message("Ma_min %f Ma_t %f Ma_max %f \n",Ma_min,Ma_t,Ma_max);*/
-        /*Message("Re_min %f Re_t %f Re_max %f \n",*/
-        /*  RE[k][ire_min],Re_t,RE[k][ire_max]);*/
-        /*Message("Ma_min %f Ma_t %f Ma_max %f \n",*/
-  			/*  MA[k][ima_min],Ma_t,MA[k][ima_max]);*/
-  
-  		  jt=0;
+        jt=0;
   
         if (aoa[k][ire_min][jt] > alpha_t)
-  		    Message("ERROR: Start AOA in airfoil table too big k %d i %d \n",
+          Message("ERROR: Start AOA in airfoil table too big k %d i %d \n",
             k, ire_min);
   
         if (aoa[k][ire_max][jt] > alpha_t)
-  		    Message("ERROR: Start AOA in airfoil table too big k %d i %d \n",
+          Message("ERROR: Start AOA in airfoil table too big k %d i %d \n",
             k, ire_max);
   
         if (aoa[k][ima_min][jt] > alpha_t)
@@ -1156,173 +989,173 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
             k, ima_min);
   
         if (aoa[k][ima_max][jt] > alpha_t)
-  		    Message("ERROR: Start AOA in airfoil table too big k %d i %d \n",
+          Message("ERROR: Start AOA in airfoil table too big k %d i %d \n",
             k, ima_max);
   
-  		  jt=jtot[k][ire_min]-1;
+        jt=jtot[k][ire_min]-1;
         if (aoa[k][ire_min][jt] < alpha_t)
-  		    Message("ERROR: End AOA in airfoil table too small k %d i %d \n",
+          Message("ERROR: End AOA in airfoil table too small k %d i %d \n",
             k, ire_min);
   
-  		  jt=jtot[k][ire_max]-1;
-  		  if (aoa[k][ire_max][jt] < alpha_t)
-  		    Message("ERROR: End AOA in airfoil table too small k %d i %d \n",
+        jt=jtot[k][ire_max]-1;
+        if (aoa[k][ire_max][jt] < alpha_t)
+          Message("ERROR: End AOA in airfoil table too small k %d i %d \n",
             k, ire_max);
   
         jt=jtot[k][ima_min]-1;
-  		  if (aoa[k][ima_min][jt] < alpha_t)
-  		    Message("ERROR: End AOA in airfoil table too small k %d i %d \n",
+        if (aoa[k][ima_min][jt] < alpha_t)
+          Message("ERROR: End AOA in airfoil table too small k %d i %d \n",
             k, ima_min);
   
-  		  jt=jtot[k][ima_max]-1;
-  		  if (aoa[k][ima_max][jt] < alpha_t)
-  		    Message("ERROR: End AOA in airfoil table too small k %d i %d \n",
+        jt=jtot[k][ima_max]-1;
+        if (aoa[k][ima_max][jt] < alpha_t)
+          Message("ERROR: End AOA in airfoil table too small k %d i %d \n",
             k, ima_max);
   
-  		/*------------------------------------------------------------------*/
+      /*------------------------------------------------------------------*/
         if ((Re_t > Re_min) && (Re_t < Re_max)) {
-  			  /*Message("RE interpolation \n");*/
+          /*Message("RE interpolation \n");*/
   
-  			  jt=0;
-          while (jt < jtot[k][ire_min]) {
-   			    if (aoa[k][ire_min][jt] > alpha_t) {
-  				    clre_min=coeff[k][ire_min][jt]+
-                (aoa[k][ire_min][jt] - alpha_t)/
-                (aoa[k][ire_min][jt] - aoa[k][ire_min][jt-1]) *
-  					 	  (coeff[k][ire_min][jt-1] - coeff[k][ire_min][jt]);
-  				    break;
-  			    }
-  			    jt+=1;
-  		    }
-  
-  			  jt=0;
-          while (jt < jtot[k][ire_max]) {
-  			    if (aoa[k][ire_max][jt] > alpha_t) {
-  				    clre_max=coeff[k][ire_max][jt]+
-                (aoa[k][ire_max][jt] - alpha_t)/
-                (aoa[k][ire_max][jt] - aoa[k][ire_max][jt-1]) *
-                (coeff[k][ire_max][jt-1] - coeff[k][ire_max][jt]);
-  				    break;
-  			    }
-            jt+=1;
-  		    }
-  			  /*Message("clre_min %f clre_max %f \n",clre_min, clre_max);*/
-  
-  			  clre=clre_max+(Re_max-Re_t)/(Re_max-Re_min)*(clre_min-clre_max);
-  
-  			  /*Message("clre %f \n",clre);*/
-        }
-        /*------------------------------------------------------------------*/
-        if (Re_t <= Re_min)	{
-  			/*Message("Re_t smaller/equal \n");*/
-  
-  			  jt=0;
+          jt=0;
           while (jt < jtot[k][ire_min]) {
             if (aoa[k][ire_min][jt] > alpha_t) {
-  			  	  clre=coeff[k][ire_min][jt]+
+              clre_min=coeff[k][ire_min][jt]+
                 (aoa[k][ire_min][jt] - alpha_t)/
                 (aoa[k][ire_min][jt] - aoa[k][ire_min][jt-1]) *
                 (coeff[k][ire_min][jt-1] - coeff[k][ire_min][jt]);
-  			  	  break;
-  			    }
-  			    jt+=1;
-  		    }
-        }
-      /*------------------------------------------------------------------*/
-        if (Re_t >= Re_max) {
-  		  	/*Message("Re_t greater/equal \n");*/
-  		  	jt=0;
-          while (jt < jtot[k][ire_max]) {
-            if (aoa[k][ire_max][jt] > alpha_t) {
-  		  		  clre=coeff[k][ire_max][jt]+
-                (aoa[k][ire_max][jt] - alpha_t)/
-                (aoa[k][ire_max][jt] - aoa[k][ire_max][jt-1]) *
-                (coeff[k][ire_max][jt-1] - coeff[k][ire_max][jt]);
-  		  		  break;
+              break;
             }
             jt+=1;
           }
-  		  	/*Message("clre = clre_max = %f \n",clre);*/
-        }
-      
-  		  /*------------------------------------------------------------------*/
-  		  if ((Ma_t > Ma_min) && (Ma_t < Ma_max)) {
-          /*Message("MA interpolation \n");*/
-  		  	jt=0;
-          while (jt < jtot[k][ima_min]) {
-            if (aoa[k][ima_min][jt] > alpha_t) {
-  		  		  clma_min=coeff[k][ima_min][jt]+
-                (aoa[k][ima_min][jt] - alpha_t)/
-                (aoa[k][ima_min][jt] - aoa[k][ima_min][jt-1]) *
-                (coeff[k][ima_min][jt-1] - coeff[k][ima_min][jt]);
-  		  		  break;
-  		  	  }
-  		  	  jt+=1;
-  		    }
   
-  		  	jt=0;
-          while (jt < jtot[k][ima_max]) {
-  		  	  if (aoa[k][ima_max][jt] > alpha_t) {
-  		  		  clma_max=coeff[k][ima_max][jt]+
-                (aoa[k][ima_max][jt] - alpha_t)/
-                (aoa[k][ima_max][jt] - aoa[k][ima_max][jt-1]) *
-                (coeff[k][ima_max][jt-1] - coeff[k][ima_max][jt]);
-  		  		  break;
+          jt=0;
+          while (jt < jtot[k][ire_max]) {
+            if (aoa[k][ire_max][jt] > alpha_t) {
+              clre_max=coeff[k][ire_max][jt]+
+                (aoa[k][ire_max][jt] - alpha_t)/
+                (aoa[k][ire_max][jt] - aoa[k][ire_max][jt-1]) *
+                (coeff[k][ire_max][jt-1] - coeff[k][ire_max][jt]);
+              break;
             }
             jt+=1;
-  		    }
-  		  	/*Message("clma_min %f clma_max %f \n",clma_min, clma_max);*/
+          }
+          /*Message("clre_min %f clre_max %f \n",clre_min, clre_max);*/
   
-  		  	clma=clma_max+(Ma_max-Ma_t)/(Ma_max-Ma_min)*(clma_min-clma_max);
+          clre=clre_max+(Re_max-Re_t)/(Re_max-Re_min)*(clre_min-clre_max);
   
-  		  	/*Message("clma %f \n",clma);*/
-   		  }
+          /*Message("clre %f \n",clre);*/
+        }
         /*------------------------------------------------------------------*/
-        if (Ma_t <= Ma_min) {
-  		  	/*Message("Ma_t smaller/equal \n");*/
+        if (Re_t <= Re_min) {
+        /*Message("Re_t smaller/equal \n");*/
   
-  		  	jt=0;
+          jt=0;
+          while (jt < jtot[k][ire_min]) {
+            if (aoa[k][ire_min][jt] > alpha_t) {
+              clre=coeff[k][ire_min][jt]+
+                (aoa[k][ire_min][jt] - alpha_t)/
+                (aoa[k][ire_min][jt] - aoa[k][ire_min][jt-1]) *
+                (coeff[k][ire_min][jt-1] - coeff[k][ire_min][jt]);
+              break;
+            }
+            jt+=1;
+          }
+        }
+      /*------------------------------------------------------------------*/
+        if (Re_t >= Re_max) {
+          /*Message("Re_t greater/equal \n");*/
+          jt=0;
+          while (jt < jtot[k][ire_max]) {
+            if (aoa[k][ire_max][jt] > alpha_t) {
+              clre=coeff[k][ire_max][jt]+
+                (aoa[k][ire_max][jt] - alpha_t)/
+                (aoa[k][ire_max][jt] - aoa[k][ire_max][jt-1]) *
+                (coeff[k][ire_max][jt-1] - coeff[k][ire_max][jt]);
+              break;
+            }
+            jt+=1;
+          }
+          /*Message("clre = clre_max = %f \n",clre);*/
+        }
+      
+        /*------------------------------------------------------------------*/
+        if ((Ma_t > Ma_min) && (Ma_t < Ma_max)) {
+          /*Message("MA interpolation \n");*/
+          jt=0;
           while (jt < jtot[k][ima_min]) {
             if (aoa[k][ima_min][jt] > alpha_t) {
-  		  		  clma=coeff[k][ima_min][jt]+
+              clma_min=coeff[k][ima_min][jt]+
                 (aoa[k][ima_min][jt] - alpha_t)/
                 (aoa[k][ima_min][jt] - aoa[k][ima_min][jt-1]) *
                 (coeff[k][ima_min][jt-1] - coeff[k][ima_min][jt]);
-  		  		  break;
-  		  	  }
-  		  	  jt+=1;
-  		    }
-  		  	/*Message("clma = clma_min = %f \n",clma);*/
+              break;
+            }
+            jt+=1;
+          }
   
-  		  }
-        /*------------------------------------------------------------------*/
-        if (Ma_t >= Ma_max) {
-  		  	/*Message("Ma_t greater/equal \n");*/
-  		  	jt=0;
+          jt=0;
           while (jt < jtot[k][ima_max]) {
             if (aoa[k][ima_max][jt] > alpha_t) {
-  		  		  clma=coeff[k][ima_max][jt]+
+              clma_max=coeff[k][ima_max][jt]+
                 (aoa[k][ima_max][jt] - alpha_t)/
                 (aoa[k][ima_max][jt] - aoa[k][ima_max][jt-1]) *
                 (coeff[k][ima_max][jt-1] - coeff[k][ima_max][jt]);
-  		  		  break;
-  		  	  }
+              break;
+            }
             jt+=1;
-  		    }
-  		  }
+          }
+          /*Message("clma_min %f clma_max %f \n",clma_min, clma_max);*/
+  
+          clma=clma_max+(Ma_max-Ma_t)/(Ma_max-Ma_min)*(clma_min-clma_max);
+  
+          /*Message("clma %f \n",clma);*/
+        }
+        /*------------------------------------------------------------------*/
+        if (Ma_t <= Ma_min) {
+          /*Message("Ma_t smaller/equal \n");*/
+  
+          jt=0;
+          while (jt < jtot[k][ima_min]) {
+            if (aoa[k][ima_min][jt] > alpha_t) {
+              clma=coeff[k][ima_min][jt]+
+                (aoa[k][ima_min][jt] - alpha_t)/
+                (aoa[k][ima_min][jt] - aoa[k][ima_min][jt-1]) *
+                (coeff[k][ima_min][jt-1] - coeff[k][ima_min][jt]);
+              break;
+            }
+            jt+=1;
+          }
+          /*Message("clma = clma_min = %f \n",clma);*/
+  
+        }
+        /*------------------------------------------------------------------*/
+        if (Ma_t >= Ma_max) {
+          /*Message("Ma_t greater/equal \n");*/
+          jt=0;
+          while (jt < jtot[k][ima_max]) {
+            if (aoa[k][ima_max][jt] > alpha_t) {
+              clma=coeff[k][ima_max][jt]+
+                (aoa[k][ima_max][jt] - alpha_t)/
+                (aoa[k][ima_max][jt] - aoa[k][ima_max][jt-1]) *
+                (coeff[k][ima_max][jt-1] - coeff[k][ima_max][jt]);
+              break;
+            }
+            jt+=1;
+          }
+        }
         /*------------------------------------------------------------------*/
   
         if (strcmp(check_name[k], type[i][j]) == 0) {
-  		  	cl_m=clre*rfac+(1.0-rfac)*clma;
-  		  	iflag=iflag+1;
+          cl_m=clre*rfac+(1.0-rfac)*clma;
+          iflag=iflag+1;
           /*Message("  check %s type %s \n",check_name[k], type[i][j]);*/
-  		  }
+        }
   
-  		  if (strcmp(check_name[k], type[i][j+1]) == 0) {
-  		  	cl_p=clre*rfac+(1.0-rfac)*clma;
-  		  	iflag=iflag+1;
+        if (strcmp(check_name[k], type[i][j+1]) == 0) {
+          cl_p=clre*rfac+(1.0-rfac)*clma;
+          iflag=iflag+1;
           /*Message("  check %s type %s \n",check_name[k], type[i][j+1]);*/
-  		  }
+        }
         if (iflag == 2) 
           break;
       }
@@ -1376,11 +1209,10 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
 
 /*---------------------------------------------------------------------------*/
   void my_get_cd(int i, cell_t cc, Thread *tc, int count, real r_pb,
-	  real Ma_t, real Re_t, real alpha_t, real *CD_ptr)
+    real Ma_t, real Re_t, real alpha_t, real *CD_ptr)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Looks up and interpolates the drag coefficient from the airfoil tables    */
+/* for the local Reynolds number, Mach number, and angle of attack.          */
 /*---------------------------------------------------------------------------*/
 {
   int j,k,it,jt;
@@ -1392,7 +1224,7 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
   real cd_m = 0, cd_p = 0;
 
 
-  rfac=0.5;		/*0 --> cd=cdma, 1 --> cd=cdre*/
+  rfac=0.5;   /*0 --> cd=cdma, 1 --> cd=cdre*/
 
 
   /*Re_t=600000;*/
@@ -1417,12 +1249,12 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
   j=0;
   iflag=0;
   while (j < nsec[i]) {
-	  if (r_pb > rout[i][j])
+    if (r_pb > rout[i][j])
       j += 1;
-	  else if (r_pb > rin[i][j])
+    else if (r_pb > rin[i][j])
       break;
-	  else
-		  Message("ERROR: Blade section radius not found. \n");
+    else
+      Message("ERROR: Blade section radius not found. \n");
   }
 
   /*Message("%f %f %f %s \n",rin[i][j],r_pb,rout[i][j],type[i][j]);*/
@@ -1431,100 +1263,100 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
   k=0;
   while (k < ktot) {
     if (strcmp(check_name[k], type[i][j]) == 0 ||
-		  strcmp(check_name[k], type[i][j+1]) == 0) {
+      strcmp(check_name[k], type[i][j+1]) == 0) {
 
       it=0;
       while (it < itot[k]) {
         if (strcmp(clorcd[k][it],"cd") == 0) {
           if (RE[k][it] < Re_min) {
-			      Re_min=RE[k][it];
-			      ire_min=it;
-			    }
+            Re_min=RE[k][it];
+            ire_min=it;
+          }
           if (RE[k][it] > Re_max) {
-			      Re_max=RE[k][it];
-			      ire_max=it;
-			    }
+            Re_max=RE[k][it];
+            ire_max=it;
+          }
           if (MA[k][it] < Ma_min) {
-			      Ma_min=MA[k][it];
-			      ima_min=it;
-			    }
+            Ma_min=MA[k][it];
+            ima_min=it;
+          }
           if (MA[k][it] > Ma_max) {
-			      Ma_max=MA[k][it];
-			      ima_max=it;
-			    }
-		    }
+            Ma_max=MA[k][it];
+            ima_max=it;
+          }
+        }
         it+=1;
-		  }
+      }
 
-		  jt=0;
+      jt=0;
       if (aoa[k][ire_min][jt] > alpha_t)
-		    Message("ERROR: Start AOA in airfoil table too big k %d i %d \n",
+        Message("ERROR: Start AOA in airfoil table too big k %d i %d \n",
           k, ire_min);
 
       if (aoa[k][ire_max][jt] > alpha_t)
-		    Message("ERROR: Start AOA in airfoil table too big k %d i %d \n",
+        Message("ERROR: Start AOA in airfoil table too big k %d i %d \n",
           k, ire_max);
 
       if (aoa[k][ima_min][jt] > alpha_t)
-		    Message("ERROR: Start AOA in airfoil table too big k %d i %d \n",
+        Message("ERROR: Start AOA in airfoil table too big k %d i %d \n",
           k, ima_min);
 
       if (aoa[k][ima_max][jt] > alpha_t)
         Message("ERROR: Start AOA in airfoil table too big k %d i %d \n",
           k, ima_max);
 
-		  jt=jtot[k][ire_min]-1;
-		  if (aoa[k][ire_min][jt] < alpha_t)
-		    Message("ERROR: End AOA in airfoil table too small k %d i %d \n",
+      jt=jtot[k][ire_min]-1;
+      if (aoa[k][ire_min][jt] < alpha_t)
+        Message("ERROR: End AOA in airfoil table too small k %d i %d \n",
           k, ire_min);
 
-		  jt=jtot[k][ire_max]-1;
-		  if (aoa[k][ire_max][jt] < alpha_t)
-		    Message("ERROR: End AOA in airfoil table too small k %d i %d \n",
+      jt=jtot[k][ire_max]-1;
+      if (aoa[k][ire_max][jt] < alpha_t)
+        Message("ERROR: End AOA in airfoil table too small k %d i %d \n",
           k, ire_max);
 
-		  jt=jtot[k][ima_min]-1;
-		  if (aoa[k][ima_min][jt] < alpha_t)
+      jt=jtot[k][ima_min]-1;
+      if (aoa[k][ima_min][jt] < alpha_t)
         Message("ERROR: End AOA in airfoil table too small k %d i %d \n",
           k, ima_min);
 
-		  jt=jtot[k][ima_max]-1;
+      jt=jtot[k][ima_max]-1;
       if (aoa[k][ima_max][jt] < alpha_t)
-		    Message("ERROR: End AOA in airfoil table too small k %d i %d \n",
+        Message("ERROR: End AOA in airfoil table too small k %d i %d \n",
           k, ima_max);
 
-		  /*------------------------------------------------------------------*/
+      /*------------------------------------------------------------------*/
       if ((Re_t > Re_min) && (Re_t < Re_max)) {
-			  /*Message("RE interpolation \n");*/
+        /*Message("RE interpolation \n");*/
 
-			  jt=0;
+        jt=0;
         while (jt < jtot[k][ire_min]) {
- 			    if (aoa[k][ire_min][jt] > alpha_t) {
-				    cdre_min=coeff[k][ire_min][jt]+
+          if (aoa[k][ire_min][jt] > alpha_t) {
+            cdre_min=coeff[k][ire_min][jt]+
               (aoa[k][ire_min][jt] - alpha_t)/
               (aoa[k][ire_min][jt] - aoa[k][ire_min][jt-1]) *
-					 	  (coeff[k][ire_min][jt-1] - coeff[k][ire_min][jt]);
-				    break;
-			    }
-			    jt+=1;
+              (coeff[k][ire_min][jt-1] - coeff[k][ire_min][jt]);
+            break;
+          }
+          jt+=1;
         }
 
-			  jt=0;
+        jt=0;
         while (jt < jtot[k][ire_max]) {
-			    if (aoa[k][ire_max][jt] > alpha_t) {
-				    cdre_max=coeff[k][ire_max][jt]+
+          if (aoa[k][ire_max][jt] > alpha_t) {
+            cdre_max=coeff[k][ire_max][jt]+
               (aoa[k][ire_max][jt] - alpha_t)/
               (aoa[k][ire_max][jt] - aoa[k][ire_max][jt-1]) *
-					 	  (coeff[k][ire_max][jt-1] - coeff[k][ire_max][jt]);
-				    break;
-			    }
+              (coeff[k][ire_max][jt-1] - coeff[k][ire_max][jt]);
+            break;
+          }
           jt+=1;
-		    }
-			  /*Message("cdre_min %f cdre_max %f \n",cdre_min, cdre_max);*/
+        }
+        /*Message("cdre_min %f cdre_max %f \n",cdre_min, cdre_max);*/
 
-			  cdre=cdre_max+(Re_max-Re_t)/(Re_max-Re_min)*(cdre_min-cdre_max);
+        cdre=cdre_max+(Re_max-Re_t)/(Re_max-Re_min)*(cdre_min-cdre_max);
 
-		  }
+      }
       /*------------------------------------------------------------------*/
       if (Re_t <= Re_min) {
         /*Message("Re_t smaller/equal \n");*/
@@ -1544,9 +1376,9 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
       }
       /*------------------------------------------------------------------*/
       if (Re_t >= Re_max) {
-			  /*Message("Re_t greater/equal \n");*/
+        /*Message("Re_t greater/equal \n");*/
 
-			  jt=0;
+        jt=0;
         while (jt < jtot[k][ire_max]) {
           if (aoa[k][ire_max][jt] > alpha_t) {
             cdre=coeff[k][ire_max][jt]+
@@ -1560,83 +1392,83 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
         /*Message("cdre = cdre_max = %f \n",cdre);*/
       }
       /*------------------------------------------------------------------*/
-		  if ((Ma_t > Ma_min) && (Ma_t < Ma_max)) {
+      if ((Ma_t > Ma_min) && (Ma_t < Ma_max)) {
         /*Message("MA interpolation \n");*/
 
-			  jt=0;
+        jt=0;
         while (jt < jtot[k][ima_min]) {
           if (aoa[k][ima_min][jt] > alpha_t) {
-				    cdma_min=coeff[k][ima_min][jt]+
+            cdma_min=coeff[k][ima_min][jt]+
               (aoa[k][ima_min][jt] - alpha_t)/
               (aoa[k][ima_min][jt] - aoa[k][ima_min][jt-1]) *
-					 	  (coeff[k][ima_min][jt-1] - coeff[k][ima_min][jt]);
-				    break;
-			    }
-			    jt+=1;
-		    }
-			  jt=0;
-        while (jt < jtot[k][ima_max]) {
-			    if (aoa[k][ima_max][jt] > alpha_t) {
-				    cdma_max=coeff[k][ima_max][jt]+
-              (aoa[k][ima_max][jt] - alpha_t)/
-              (aoa[k][ima_max][jt] - aoa[k][ima_max][jt-1]) *
-					 	  (coeff[k][ima_max][jt-1] - coeff[k][ima_max][jt]);
-				    break;
+              (coeff[k][ima_min][jt-1] - coeff[k][ima_min][jt]);
+            break;
           }
           jt+=1;
-		    }
-			  cdma=cdma_max+(Ma_max-Ma_t)/(Ma_max-Ma_min)*(cdma_min-cdma_max);
- 		  }
-      /*------------------------------------------------------------------*/
-      if (Ma_t <= Ma_min) {
-			  /*Message("Ma_t smaller/equal \n");*/
-			  jt=0;
-        while (jt < jtot[k][ima_min]) {
-          if (aoa[k][ima_min][jt] > alpha_t) {
-				    cdma=coeff[k][ima_min][jt]+
-              (aoa[k][ima_min][jt] - alpha_t)/
-              (aoa[k][ima_min][jt] - aoa[k][ima_min][jt-1]) *
-					 	  (coeff[k][ima_min][jt-1] - coeff[k][ima_min][jt]);
-				    break;
-			    }
-			    jt+=1;
-		    }
-			  /*Message("cdma = cdma_min = %f \n",cdma);*/
-		  }
-      /*------------------------------------------------------------------*/
-      if (Ma_t >= Ma_max) {
-			  /*Message("Ma_t greater/equal \n");*/
-			  jt=0;
+        }
+        jt=0;
         while (jt < jtot[k][ima_max]) {
           if (aoa[k][ima_max][jt] > alpha_t) {
-				    cdma=coeff[k][ima_max][jt]+
+            cdma_max=coeff[k][ima_max][jt]+
               (aoa[k][ima_max][jt] - alpha_t)/
               (aoa[k][ima_max][jt] - aoa[k][ima_max][jt-1]) *
-					 	  (coeff[k][ima_max][jt-1] - coeff[k][ima_max][jt]);
+              (coeff[k][ima_max][jt-1] - coeff[k][ima_max][jt]);
             break;
-			    }
+          }
           jt+=1;
-		    }
-		  }
+        }
+        cdma=cdma_max+(Ma_max-Ma_t)/(Ma_max-Ma_min)*(cdma_min-cdma_max);
+      }
+      /*------------------------------------------------------------------*/
+      if (Ma_t <= Ma_min) {
+        /*Message("Ma_t smaller/equal \n");*/
+        jt=0;
+        while (jt < jtot[k][ima_min]) {
+          if (aoa[k][ima_min][jt] > alpha_t) {
+            cdma=coeff[k][ima_min][jt]+
+              (aoa[k][ima_min][jt] - alpha_t)/
+              (aoa[k][ima_min][jt] - aoa[k][ima_min][jt-1]) *
+              (coeff[k][ima_min][jt-1] - coeff[k][ima_min][jt]);
+            break;
+          }
+          jt+=1;
+        }
+        /*Message("cdma = cdma_min = %f \n",cdma);*/
+      }
+      /*------------------------------------------------------------------*/
+      if (Ma_t >= Ma_max) {
+        /*Message("Ma_t greater/equal \n");*/
+        jt=0;
+        while (jt < jtot[k][ima_max]) {
+          if (aoa[k][ima_max][jt] > alpha_t) {
+            cdma=coeff[k][ima_max][jt]+
+              (aoa[k][ima_max][jt] - alpha_t)/
+              (aoa[k][ima_max][jt] - aoa[k][ima_max][jt-1]) *
+              (coeff[k][ima_max][jt-1] - coeff[k][ima_max][jt]);
+            break;
+          }
+          jt+=1;
+        }
+      }
       /*------------------------------------------------------------------*/
 
       if (strcmp(check_name[k], type[i][j]) == 0) {
-			  cd_m=cdre*rfac+(1.0-rfac)*cdma;
-			  iflag=iflag+1;
-		    /*Message("  check %s type %s \n",check_name[k], type[i][j]);*/
-		  }
+        cd_m=cdre*rfac+(1.0-rfac)*cdma;
+        iflag=iflag+1;
+        /*Message("  check %s type %s \n",check_name[k], type[i][j]);*/
+      }
 
-		  if (strcmp(check_name[k], type[i][j+1]) == 0) {
-			  cd_p=cdre*rfac+(1.0-rfac)*cdma;
-			  iflag=iflag+1;
-		    /*Message("  check %s type %s \n",check_name[k], type[i][j+1]);*/
-		  }
+      if (strcmp(check_name[k], type[i][j+1]) == 0) {
+        cd_p=cdre*rfac+(1.0-rfac)*cdma;
+        iflag=iflag+1;
+        /*Message("  check %s type %s \n",check_name[k], type[i][j+1]);*/
+      }
 
       if (iflag == 2) 
         break;
 
-	  }
-	  k+=1;
+    }
+    k+=1;
   }
 
   cd = cd_m + (cd_p-cd_m)/(rout[i][j]-rin[i][j])*(r_pb-rin[i][j]);
@@ -1653,61 +1485,54 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
 
 /*---------------------------------------------------------------------------*/
   void my_get_force(int i, cell_t cc, Thread *tc, real *factor_ptr,
-    real *sum_area, int count, real CL, real CD, 
+    real *sum_area, int count, real CL, real CD,
     real chord, real aeps, real Utotal, real r_pb,
-	  real *Ftc_ptr, real *Fnc_ptr, real *Fsc_ptr, int isunst, int local_indx,
+    real *Ftc_ptr, real *Fnc_ptr, real *Fsc_ptr, int isunst, int local_indx,
     real sample_vol)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Computes the blade tangential, normal, and radial force components at the */
+/* current cell, applying a Gaussian (ALM) or geometric (BEM) distribution. */
+/* Applies tip loss cutoff based on teff.                                    */
 /*---------------------------------------------------------------------------*/
   {
     real FL, FD;
     real aepss, aepsc;
     real tmp;
-    int n;
 
-    if(isunst == 1){      
-      tmp = 0.5 * Utotal * Utotal * C_R(cc,tc) * pow(cbrt(C_VOLUME(cc,tc)),2);
-    }
-    else{
-      tmp = chord * 0.5 * Utotal * Utotal * C_R(cc,tc) * factor_ptr[local_indx];
-    }    
-  
-    if(isnan(tmp)) {
-      Message0("Warning, tmp returns NaN at iter %d \n",count);
-    }
-  
+    if (isunst == 1)
+      tmp = 0.5 * Utotal * Utotal * C_R(cc, tc) * pow(cbrt(C_VOLUME(cc, tc)), 2);
+    else
+      tmp = chord * 0.5 * Utotal * Utotal * C_R(cc, tc) * factor_ptr[local_indx];
 
-    FL=CL*tmp;
-    FD=CD*tmp;
-  
-    /*Tip effect*/
-    if (r_pb > teff[i]) {
-	    FL = 0.0;
-      /*Message("Tip effect %f \n",r_pb);*/
-    }
-  
+    if (isnan(tmp))
+      Message0("Warning: force scaling factor is NaN at iter %d\n", count);
+
+    FL = CL * tmp;
+    FD = CD * tmp;
+
+    /* Apply tip loss: zero lift beyond the tip effect radius. */
+    if (r_pb > teff[i])
+      FL = 0.0;
+
     aepss = sin(aeps);
     aepsc = cos(aeps);
-  
-    *Ftc_ptr = FD*aepsc - FL*aepss;
-    *Fnc_ptr = FD*aepss + FL*aepsc;
+
+    *Ftc_ptr = FD * aepsc - FL * aepss;
+    *Fnc_ptr = FD * aepss + FL * aepsc;
     *Fsc_ptr = 0.0;
-  
-    if(isnan(*Fnc_ptr)) {
-      Message0("Warning, Fnc_ptr returns NaN at iter %d \n",count);
-      errchk=1;
+
+    if (isnan(*Fnc_ptr)) {
+      Message0("Warning: Fnc is NaN at iter %d\n", count);
+      errchk = 1;
     }
   }
 
 
 /*---------------------------------------------------------------------------*/
   void my_force_blade_to_xyz(int i, cell_t cc, Thread *tc, int count,
-	  real Ftc, real Fnc, real Fsc, real beta, real psi_pb,
-	  real *Fx_ptr, real *Fy_ptr, real *Fz_ptr,
-    real *Fz_pb_ptr, real *Ft_pb_ptr, real chord, real r_pb, 
+    real Ftc, real Fnc, real Fsc, real beta, real psi_pb,
+    real *Fx_ptr, real *Fy_ptr, real *Fz_ptr,
+    real *Fz_pb_ptr, real *Ft_pb_ptr, real chord, real r_pb,
     real *gwf, int isunst, int *rotor_cell,
     real beta_pb, int *gauss_active, real *sum_gwf,
     real dpitc, real dpits, real dbanc, real dbans,
@@ -1717,29 +1542,21 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
     real *saz_fac, real *sve_fac, real *gde_fac, real *deltapsi,
     real *az_dist, real *vert_dist)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Rotates blade-frame forces back into global XYZ. In unsteady (ALM) mode, */
+/* applies a Gaussian distribution based on the nearest blade position.      */
 /*---------------------------------------------------------------------------*/
   {
     real Fr_pb, Ft_pb, Fz_pb;
     real Fx_pb, Fy_pb;
     real tmp1;
-    real blade_psi_curr; /* Current blade psi angle (rad).*/
-    real blade_psi_init; /* Initial blade psi angle (rad).*/
-    real bsa; /* Blade spacing angle (rad).*/
-    
-    
+    real blade_psi_curr; /* Current blade azimuth angle (rad). */
+    real blade_psi_init; /* Initial blade azimuth angle (rad). */
+    real bsa;            /* Blade spacing angle (rad). */
 
-    if(count == 0) {
-      if (dbg == 1) 
-        Message0("  %d Rotor %d - force_blade_to_xyz \n",myid,i+1);
-    }
-    
-    if(rspe[i] > 0.0)
-	    tmp1=-1.0;
-    if(rspe[i] < 0.0)
-	    tmp1=1.0;
+    if (count == 0 && dbg == 1)
+      Message0("  %d Rotor %d - force_blade_to_xyz\n", myid, i + 1);
+
+    tmp1 = (rspe[i] > 0.0) ? -1.0 : 1.0;
   
     Fr_pb = Fsc * betac -          Fnc*betas;
     Ft_pb =             tmp1*Ftc;
@@ -1827,14 +1644,14 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
   }
 
 /*---------------------------------------------------------------------------*/
-  void my_gauss_opt(int i, real sum_sample_vol, real sum_gwf, int gauss_active, 
+  void my_gauss_opt(int i, real sum_sample_vol, real sum_gwf, int gauss_active,
     int vol_sample_entries, int cellsaboverotor, int cells_ahead_behind_rotor,
     real *gauss_denom, real *sigma_vert, real *sigma_az,
     real *saz_fac, real *sve_fac, real *gde_fac)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Optional Gaussian parameter optimisation routine. Adjusts sigma_az to    */
+/* minimise cells ahead/behind the rotor blade. Only active when             */
+/* gauss_routine == 1.                                                       */
 /*---------------------------------------------------------------------------*/
   {
     real gauss_sldty_old; /* Old Gaussian solidity. */
@@ -1927,73 +1744,53 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
 
 /*---------------------------------------------------------------------------*/
   void my_get_source_terms(int i, cell_t cc, Thread *tc, int count,
-	  real *xsource_ptr, real *ysource_ptr, real *zsource_ptr,
-	  real *xsource_old_ptr, real *ysource_old_ptr, real *zsource_old_ptr,
-	  real Fx, real Fy, real Fz, real urf_source, int local_indx)
+    real *xsource_ptr, real *ysource_ptr, real *zsource_ptr,
+    real *xsource_old_ptr, real *ysource_old_ptr, real *zsource_old_ptr,
+    real Fx, real Fy, real Fz, real urf_source, int local_indx)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Writes under-relaxed momentum source terms to per-cell memory arrays.     */
+/* On the first iteration (istflag == 1) no URF blending is applied.         */
 /*---------------------------------------------------------------------------*/
   {
     real vol;
-    int i_count;
-  
-    if(count == 0) {
-      if (dbg == 1)
-        Message0("  %d Rotor %d - get_source_terms \n",myid,i+1);
+
+    if (count == 0 && dbg == 1)
+      Message0("  %d Rotor %d - get_source_terms\n", myid, i + 1);
+
+    vol = C_VOLUME(cc, tc);
+    if (vol == 0.0) {
+      Message0("Warning: Rotor %d cell volume is zero.\n", i + 1);
+      xsource_ptr[local_indx] = 0.0;
+      ysource_ptr[local_indx] = 0.0;
+      zsource_ptr[local_indx] = 0.0;
     }
-  
-    vol= C_VOLUME(cc,tc);
-  
-    if(vol == 0)
-      Message0("Warning: Rotor %d volume is zero.\n",i+1);
-  
-    i_count=N_ITER;
-    /*Message("i_count %d istflag %d \n",i_count,istflag);*/
-    if(istflag != 1 || i_count == 0) {
-      if (vol == 0.0) {
-        xsource_ptr[local_indx] = 0.0;
-        ysource_ptr[local_indx] = 0.0;
-        zsource_ptr[local_indx] = 0.0;
-      } 
-      else {
-        xsource_ptr[local_indx] = (-Fx/vol) * urf_source + 
-          (1.0 - urf_source) * xsource_old_ptr[local_indx];
-        ysource_ptr[local_indx] = (-Fy/vol) * urf_source + 
-          (1.0 - urf_source) * ysource_old_ptr[local_indx];
-        zsource_ptr[local_indx] = (-Fz/vol) * urf_source + 
-          (1.0 - urf_source) * zsource_old_ptr[local_indx];
-      }
-      /*Message("start or typical");*/
+    else if (istflag != 1 || N_ITER == 0) {
+      /* Blended update (all iterations after the first ADJUST run). */
+      xsource_ptr[local_indx] = (-Fx / vol) * urf_source +
+        (1.0 - urf_source) * xsource_old_ptr[local_indx];
+      ysource_ptr[local_indx] = (-Fy / vol) * urf_source +
+        (1.0 - urf_source) * ysource_old_ptr[local_indx];
+      zsource_ptr[local_indx] = (-Fz / vol) * urf_source +
+        (1.0 - urf_source) * zsource_old_ptr[local_indx];
     }
     else {
-      if (vol == 0.0) {
-        xsource_ptr[local_indx] = 0.0;
-        ysource_ptr[local_indx] = 0.0;
-        zsource_ptr[local_indx] = 0.0;
-      } 
-      else {
-        xsource_ptr[local_indx] = (-Fx/vol);
-        ysource_ptr[local_indx] = (-Fy/vol);
-        zsource_ptr[local_indx] = (-Fz/vol);
-      }
+      /* First iteration: no blending. */
+      xsource_ptr[local_indx] = -Fx / vol;
+      ysource_ptr[local_indx] = -Fy / vol;
+      zsource_ptr[local_indx] = -Fz / vol;
     }
-  
+
+    /* Store for next iteration's under-relaxation. */
     xsource_old_ptr[local_indx] = xsource_ptr[local_indx];
     ysource_old_ptr[local_indx] = ysource_ptr[local_indx];
     zsource_old_ptr[local_indx] = zsource_ptr[local_indx];
-
   }
 
 /*---------------------------------------------------------------------------*/
   void my_get_cone(int i, real thrust)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Placeholder for a blade coning angle calculation. Not yet implemented.    */
 /*---------------------------------------------------------------------------*/
-
   {
   /*real lb, lbx;                                                                                               
     real wb, wbx;                                                                                               
@@ -2017,71 +1814,53 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
 /*---------------------------------------------------------------------------*/
   void my_get_ct(int i, real thrust, real coeff_denom)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Computes the rotor thrust coefficient CT[i].                              */
 /*---------------------------------------------------------------------------*/
   {
-    /*Message("rho_ref = %f %f %f %f %f \n",rho_ref,
-    coef_fac, rrl[i], rspe[i], M_PI);*/
-  
     if (coeff_denom == 0.0) {
-      Message("Error: Thrust coeff denominator for rotor %d is zero.\n",i+1);
+      Message("Error: Thrust coeff denominator for rotor %d is zero.\n", i + 1);
       CT[i] = 0.0;
-    } 
+    }
     else {
-      CT[i] = thrust/coeff_denom;
+      CT[i] = thrust / coeff_denom;
     }
   }
 
 /*---------------------------------------------------------------------------*/
   void my_get_cmx(int i, real Mx_pb, real coeff_denom)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Computes the rotor roll moment coefficient CMX[i].                        */
 /*---------------------------------------------------------------------------*/
   {
-    /*Message("rho_ref = %f %f %f %f %f \n",rho_ref,
-    coef_fac, rrl[i], rspe[i], M_PI);*/
-  
     if (coeff_denom == 0.0) {
-  
-      Message("Error: X-moment coeff denominator for rotor %d is zero.\n",i+1);
+      Message("Error: X-moment coeff denominator for rotor %d is zero.\n", i + 1);
       CMX[i] = 0.0;
-    } 
+    }
     else {
-      CMX[i]= Mx_pb/coeff_denom;
-    }  
+      CMX[i] = Mx_pb / coeff_denom;
+    }
   }
 
 /*---------------------------------------------------------------------------*/
   void my_get_cmy(int i, real My_pb, real coeff_denom)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Computes the rotor pitch moment coefficient CMY[i].                       */
 /*---------------------------------------------------------------------------*/
   {
-    /*Message("rho_ref = %f %f %f %f %f \n",rho_ref,
-    coef_fac, rrl[i], rspe[i], M_PI);*/
-  
     if (coeff_denom == 0.0) {
-  
-      Message("Error: Y-moment coeff denominator for rotor %d is zero.\n",i+1);
+      Message("Error: Y-moment coeff denominator for rotor %d is zero.\n", i + 1);
       CMY[i] = 0.0;
-    } 
+    }
     else {
-      CMY[i] = My_pb/coeff_denom;
-    }  
+      CMY[i] = My_pb / coeff_denom;
+    }
   }
 
 /*---------------------------------------------------------------------------*/
   void my_force_moment_balancing(int i, real thr)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Adjusts the main and tail rotor thrust targets to balance fuselage forces */
+/* and moments. Only active when forba/momba flags are set.                  */
 /*---------------------------------------------------------------------------*/
   {
     Domain *d = Get_Domain(1);
@@ -2168,7 +1947,7 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
     real trdf_co[], real trdf_cy[],
     int up_co[], int up_cy[],
     int *flag_jac_ptr,
-    real *ct_l_ptr, real *ct_s_ptr, real *ct_h_ptr,
+    real *ct_l_ptr,  real *ct_s_ptr,  real *ct_h_ptr,
     real *bcop_l_ptr, real *bcop_s_ptr, real *bcop_h_ptr,
     real *cmx_lc_ptr, real *cmx_ls_ptr, real *cmx_s_ptr,
     real *cmx_hc_ptr, real *cmx_hs_ptr,
@@ -2176,15 +1955,14 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
     real *cmy_hc_ptr, real *cmy_hs_ptr,
     real *bcyc_l_ptr, real *bcyc_s_ptr, real *bcyc_h_ptr,
     real *bcys_l_ptr, real *bcys_s_ptr, real *bcys_h_ptr,
-    real *ct_lc_ptr, real *ct_ls_ptr,
-    real *ct_hc_ptr, real *ct_hs_ptr,
-    real *cmx_l_ptr, real *cmx_h_ptr,
-    real *cmy_l_ptr, real *cmy_h_ptr,
+    real *ct_lc_ptr,  real *ct_ls_ptr,
+    real *ct_hc_ptr,  real *ct_hs_ptr,
+    real *cmx_l_ptr,  real *cmx_h_ptr,
+    real *cmy_l_ptr,  real *cmy_h_ptr,
     real thr)
 /*---------------------------------------------------------------------------*/
-/*     								             */
-/*     								             */
-/*Version	Date	Name			Remarks		             */
+/* Runs the Jacobian-based trimming algorithm for collective and/or cyclic   */
+/* pitch, targeting desired CT, CMX, and CMY values.                         */
 /*---------------------------------------------------------------------------*/
   {
     real del_co;
@@ -2207,7 +1985,7 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
       }
       else {
         trnw = 1;
-	  	  if (*flag_jac_ptr == 0) {
+        if (*flag_jac_ptr == 0) {
           if (dbg == 1)
             Message0("Trimming collective pitch: ON \n");
   
@@ -2217,50 +1995,50 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
           *bcop_s_ptr=bcop[i];
   
           if (dbg == 1){
-	    	    Message0("CT(actual)= %f CT(desired)= %f \n", CT[i], ctd[i]);
+            Message0("CT(actual)= %f CT(desired)= %f \n", CT[i], ctd[i]);
             Message0("%d CO ALPHA PLUS \n",myid);
           }
 
-	  	    bcop[i]=*bcop_s_ptr+dalpha;
-	  	    *bcop_h_ptr=bcop[i];
+          bcop[i]=*bcop_s_ptr+dalpha;
+          *bcop_h_ptr=bcop[i];
           *flag_jac_ptr = 1;
-	  	    goto COEND;
-	  	  }
+          goto COEND;
+        }
   
-	  	  if (*flag_jac_ptr == 1) {
+        if (*flag_jac_ptr == 1) {
           if (dbg == 1)
-  	  	    Message0("%d CO ALPHA MINUS \n",myid);
+            Message0("%d CO ALPHA MINUS \n",myid);
   
-	  	    /*store ct_h*/
+          /*store ct_h*/
           *ct_h_ptr=CT[i];
-	  	    bcop[i]=*bcop_s_ptr-dalpha;
-	  	    *bcop_l_ptr=bcop[i];
+          bcop[i]=*bcop_s_ptr-dalpha;
+          *bcop_l_ptr=bcop[i];
   
           *flag_jac_ptr = -1;
   
-	  	    goto COEND;
-	  	  }
+          goto COEND;
+        }
   
-	  	  if (*flag_jac_ptr == -1) {
+        if (*flag_jac_ptr == -1) {
           /*store ct_l*/
           *ct_l_ptr=CT[i];
   
-	  	    /*determine new angle*/
+          /*determine new angle*/
           ct_l   = *ct_l_ptr;
-	  	    ct_s   = *ct_s_ptr;
-	  	    ct_h   = *ct_h_ptr;
-	  	    bcop_l = *bcop_l_ptr;
-	  	    bcop_s = *bcop_s_ptr;
-	  	    bcop_h = *bcop_h_ptr;
+          ct_s   = *ct_s_ptr;
+          ct_h   = *ct_h_ptr;
+          bcop_l = *bcop_l_ptr;
+          bcop_s = *bcop_s_ptr;
+          bcop_h = *bcop_h_ptr;
   
   
-	  	    Ctmp=(ct_s-ct_h-(bcop_s-bcop_h)/(bcop_s-bcop_l)*(ct_s-ct_l))/
+          Ctmp=(ct_s-ct_h-(bcop_s-bcop_h)/(bcop_s-bcop_l)*(ct_s-ct_l))/
             ((bcop_s-bcop_h)*(bcop_h-bcop_l));
   
-	  	    Btmp=(ct_s-ct_l-Ctmp*(bcop_s*bcop_s - bcop_l*bcop_l))/
-	  			  (bcop_s-bcop_l);
+          Btmp=(ct_s-ct_l-Ctmp*(bcop_s*bcop_s - bcop_l*bcop_l))/
+            (bcop_s-bcop_l);
   
-	  	    del_co=trdf_co[i]*(ctd[i]-ct_s)/(Btmp+2.*Ctmp*bcop_s);
+          del_co=trdf_co[i]*(ctd[i]-ct_s)/(Btmp+2.*Ctmp*bcop_s);
 
           /*limiter*/
           if(del_co > dalpha*limiter) 
@@ -2270,21 +2048,21 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
           bcop[i]=bcop_s+del_co;
   
           if (dbg == 1){
-	  	      Message0("bcop_l %f bcop_s %f bcop_h %f \n", bcop_l*180/M_PI, 
+            Message0("bcop_l %f bcop_s %f bcop_h %f \n", bcop_l*180/M_PI, 
               bcop_s*180/M_PI, bcop_h*180/M_PI);
             Message0("ct_l %f ct_s %f ct_h %f \n", ct_l, ct_s, ct_h);
   
-	  	      Message0("old collective pitch %f \n", bcop_s*180/M_PI);
-	  	      Message0("%f = new collective for rotor %d, \n ",
+            Message0("old collective pitch %f \n", bcop_s*180/M_PI);
+            Message0("%f = new collective for rotor %d, \n ",
               bcop[i]*180/M_PI, i+1);
-	  	      Message0("difference %f \n", del_co*180/M_PI);
+            Message0("difference %f \n", del_co*180/M_PI);
           }
 
-	  	    *flag_jac_ptr = 10;
+          *flag_jac_ptr = 10;
   
-	  	    up_co[i]=1;
+          up_co[i]=1;
           goto COEND;
-	  	  }
+        }
       }
     }
     COEND:
@@ -2301,7 +2079,7 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
           /*modify_bcys_and_bcyc();*/
   
   
-	  			/*store cmx_s cmy_s*/
+          /*store cmx_s cmy_s*/
           *cmx_s_ptr=CMX[i];
           *cmy_s_ptr=CMY[i];
   
@@ -2309,142 +2087,142 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
           *bcyc_s_ptr = bcyc[i];
   
   
-	  			Message0("    %d CMX(actual)= %f CMX(desired)= %f \n",myid, CMX[i], cmxd[i]);
-	  			Message0("    %d CMY(actual)= %f CMY(desired)= %f \n",myid, CMY[i], cmyd[i]);
+          Message0("    %d CMX(actual)= %f CMX(desired)= %f \n",myid, CMX[i], cmxd[i]);
+          Message0("    %d CMY(actual)= %f CMY(desired)= %f \n",myid, CMY[i], cmyd[i]);
   
   
           Message0("%d CYC ALPHA PLUS \n",myid);
   
-	  			bcys[i]=*bcys_s_ptr;
-	  			bcyc[i]=*bcyc_s_ptr+dalpha;
+          bcys[i]=*bcys_s_ptr;
+          bcyc[i]=*bcyc_s_ptr+dalpha;
   
-	  			/**bcys_h_ptr = bcys[i];*/
+          /**bcys_h_ptr = bcys[i];*/
           *bcyc_h_ptr = bcyc[i];
   
           *flag_jac_ptr = 2;
   
-	  			goto CYEND;
-	  	  }
+          goto CYEND;
+        }
   
-	  	  if (*flag_jac_ptr == 2) {
+        if (*flag_jac_ptr == 2) {
   
-	  			/*store cmx_h cmy_h*/
-	  			*cmx_hc_ptr=CMX[i];
-	  			*cmy_hc_ptr=CMY[i];
+          /*store cmx_h cmy_h*/
+          *cmx_hc_ptr=CMX[i];
+          *cmy_hc_ptr=CMY[i];
   
           Message0("%d CYC ALPHA MINUS \n",myid);
   
-	  			bcys[i]=*bcys_s_ptr;
-	  			bcyc[i]=*bcyc_s_ptr-dalpha;
+          bcys[i]=*bcys_s_ptr;
+          bcyc[i]=*bcyc_s_ptr-dalpha;
   
-	  			/**bcys_l_ptr = bcys[i];*/
+          /**bcys_l_ptr = bcys[i];*/
           *bcyc_l_ptr = bcyc[i];
   
   
           *flag_jac_ptr = -2;
   
           goto CYEND;
-	  	  }
+        }
   
   
-	  	  if (*flag_jac_ptr == -2) {
-	  			/*store cmx_h cmy_h*/
-	  			*cmx_lc_ptr=CMX[i];
-	  			*cmy_lc_ptr=CMY[i];
+        if (*flag_jac_ptr == -2) {
+          /*store cmx_h cmy_h*/
+          *cmx_lc_ptr=CMX[i];
+          *cmy_lc_ptr=CMY[i];
   
-	  			Message0("%d CYS ALPHA PLUS \n",myid);
+          Message0("%d CYS ALPHA PLUS \n",myid);
   
-	  			bcys[i]=*bcys_s_ptr+dalpha;
-	  			bcyc[i]=*bcyc_s_ptr;
+          bcys[i]=*bcys_s_ptr+dalpha;
+          bcyc[i]=*bcyc_s_ptr;
   
-	  			*bcys_h_ptr = bcys[i];
+          *bcys_h_ptr = bcys[i];
           /**bcyc_l_ptr = bcyc[i];*/
   
   
           *flag_jac_ptr = 3;
   
           goto CYEND;
-	  	  }
+        }
   
   
-	  	  if (*flag_jac_ptr == 3) {
-	  			/*store cmx_h cmy_h*/
-	  			*cmx_hs_ptr=CMX[i];
-	  			*cmy_hs_ptr=CMY[i];
+        if (*flag_jac_ptr == 3) {
+          /*store cmx_h cmy_h*/
+          *cmx_hs_ptr=CMX[i];
+          *cmy_hs_ptr=CMY[i];
   
-	  			Message0("%d CYS ALPHA MINUS \n",myid);
+          Message0("%d CYS ALPHA MINUS \n",myid);
   
-	  			bcys[i]=*bcys_s_ptr-dalpha;
-	  			bcyc[i]=*bcyc_s_ptr;
+          bcys[i]=*bcys_s_ptr-dalpha;
+          bcyc[i]=*bcyc_s_ptr;
   
-	  			*bcys_l_ptr = bcys[i];
+          *bcys_l_ptr = bcys[i];
           /**bcyc_l_ptr = bcyc[i];*/
   
   
           *flag_jac_ptr = -3;
   
           goto CYEND;
-	  	  }
+        }
   
   
-	  	  if (*flag_jac_ptr == -3) {
+        if (*flag_jac_ptr == -3) {
   
   
           /*store cmx_l cmy_l*/
           *cmx_ls_ptr=CMX[i];
-	  			*cmy_ls_ptr=CMY[i];
+          *cmy_ls_ptr=CMY[i];
   
   
-	  			/*determine new angle*/
+          /*determine new angle*/
   
   
           cmx_lc   = *cmx_lc_ptr;
           cmx_ls   = *cmx_ls_ptr;
           cmy_lc   = *cmy_lc_ptr;
           cmy_ls   = *cmy_ls_ptr;
-	  			cmx_s    = *cmx_s_ptr;
+          cmx_s    = *cmx_s_ptr;
           cmy_s    = *cmy_s_ptr;
-	  			cmx_hc   = *cmx_hc_ptr;
-	  			cmx_hs   = *cmx_hs_ptr;
+          cmx_hc   = *cmx_hc_ptr;
+          cmx_hs   = *cmx_hs_ptr;
           cmy_hc   = *cmy_hc_ptr;
           cmy_hs   = *cmy_hs_ptr;
   
-	  			bcyc_l = *bcyc_l_ptr;
-	  			bcyc_s = *bcyc_s_ptr;
-	  			bcyc_h = *bcyc_h_ptr;
-	  			bcys_l = *bcys_l_ptr;
-	  			bcys_s = *bcys_s_ptr;
-	  			bcys_h = *bcys_h_ptr;
+          bcyc_l = *bcyc_l_ptr;
+          bcyc_s = *bcyc_s_ptr;
+          bcyc_h = *bcyc_h_ptr;
+          bcys_l = *bcys_l_ptr;
+          bcys_s = *bcys_s_ptr;
+          bcys_h = *bcys_h_ptr;
   
   
           /*d(cmx)/d(bcys)*/
-	  			Ctmp=(cmx_s-cmx_hs-(bcys_s-bcys_h)/(bcys_s-bcys_l)*(cmx_s-cmx_ls))/
-	  			  ((bcys_s-bcys_h)*(bcys_h-bcys_l));
-	  			Btmp=(cmx_s-cmx_ls-Ctmp*(bcys_s*bcys_s - bcys_l*bcys_l))/
-	  			  (bcys_s-bcys_l);
+          Ctmp=(cmx_s-cmx_hs-(bcys_s-bcys_h)/(bcys_s-bcys_l)*(cmx_s-cmx_ls))/
+            ((bcys_s-bcys_h)*(bcys_h-bcys_l));
+          Btmp=(cmx_s-cmx_ls-Ctmp*(bcys_s*bcys_s - bcys_l*bcys_l))/
+            (bcys_s-bcys_l);
           dcmx_bcys = Btmp+2.*Ctmp*bcys_s;
   
   
-	  			/*d(cmx)/d(bcyc)*/
-	  			Ctmp=(cmx_s-cmx_hc-(bcyc_s-bcyc_h)/(bcyc_s-bcyc_l)*(cmx_s-cmx_lc))/
+          /*d(cmx)/d(bcyc)*/
+          Ctmp=(cmx_s-cmx_hc-(bcyc_s-bcyc_h)/(bcyc_s-bcyc_l)*(cmx_s-cmx_lc))/
             ((bcyc_s-bcyc_h)*(bcyc_h-bcyc_l));
-	  			Btmp=(cmx_s-cmx_lc-Ctmp*(bcyc_s*bcyc_s - bcyc_l*bcyc_l))/
+          Btmp=(cmx_s-cmx_lc-Ctmp*(bcyc_s*bcyc_s - bcyc_l*bcyc_l))/
             (bcyc_s-bcyc_l);
           dcmx_bcyc = Btmp+2.*Ctmp*bcyc_s;
   
   
-	  			/*d(cmy)/d(bcys)*/
-	  			Ctmp=(cmy_s-cmy_hs-(bcys_s-bcys_h)/(bcys_s-bcys_l)*(cmy_s-cmy_ls))/
+          /*d(cmy)/d(bcys)*/
+          Ctmp=(cmy_s-cmy_hs-(bcys_s-bcys_h)/(bcys_s-bcys_l)*(cmy_s-cmy_ls))/
             ((bcys_s-bcys_h)*(bcys_h-bcys_l));
-	  			Btmp=(cmy_s-cmy_ls-Ctmp*(bcys_s*bcys_s - bcys_l*bcys_l))/
+          Btmp=(cmy_s-cmy_ls-Ctmp*(bcys_s*bcys_s - bcys_l*bcys_l))/
             (bcys_s-bcys_l);
           dcmy_bcys = Btmp+2.*Ctmp*bcys_s;
   
   
-	  			/*d(cmy)/d(bcyc)*/
-	  			Ctmp=(cmy_s-cmy_hc-(bcyc_s-bcyc_h)/(bcyc_s-bcyc_l)*(cmy_s-cmy_lc))/
+          /*d(cmy)/d(bcyc)*/
+          Ctmp=(cmy_s-cmy_hc-(bcyc_s-bcyc_h)/(bcyc_s-bcyc_l)*(cmy_s-cmy_lc))/
             ((bcyc_s-bcyc_h)*(bcyc_h-bcyc_l));
-	  			Btmp=(cmy_s-cmy_lc-Ctmp*(bcyc_s*bcyc_s - bcyc_l*bcyc_l))/
+          Btmp=(cmy_s-cmy_lc-Ctmp*(bcyc_s*bcyc_s - bcyc_l*bcyc_l))/
             (bcyc_s-bcyc_l);
           dcmy_bcyc = Btmp+2.*Ctmp*bcyc_s;
   
@@ -2459,18 +2237,18 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
           /*Message("%f %f %f %f \n",dcmy_bcyc,dcmx_bcys,dcmy_bcys,dcmx_bcyc);*/
   
   
-	  			del_cyc = trdf_cy[i]*det_jac * (dcmx_bcys*(cmyd[i]-cmy_s) -
-	  			  dcmy_bcys*(cmxd[i]-cmx_s));
+          del_cyc = trdf_cy[i]*det_jac * (dcmx_bcys*(cmyd[i]-cmy_s) -
+            dcmy_bcys*(cmxd[i]-cmx_s));
   
-	  			/*Message("%f %f %f %f %f %f \n",trdf_cy[i],det_jac,dcmx_bcys,
-	  			  (cmyd[i]-cmy_s),
+          /*Message("%f %f %f %f %f %f \n",trdf_cy[i],det_jac,dcmx_bcys,
+            (cmyd[i]-cmy_s),
             dcmy_bcys,(cmxd[i]-cmx_s));*/
           /*Message("%f \n", dcmx_bcys*(cmyd[i]-cmy_s) -
-	  			  dcmy_bcys*(cmxd[i]-cmx_s));*/
+            dcmy_bcys*(cmxd[i]-cmx_s));*/
   
   
-	  			del_cys = trdf_cy[i]*det_jac * (-dcmx_bcyc*(cmyd[i]-cmy_s) +
-	  			  dcmy_bcyc*(cmxd[i]-cmx_s));
+          del_cys = trdf_cy[i]*det_jac * (-dcmx_bcyc*(cmyd[i]-cmy_s) +
+            dcmy_bcyc*(cmxd[i]-cmx_s));
   
           /*limiter*/
           if(del_cyc > dalpha*limiter) 
@@ -2483,11 +2261,11 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
             del_cys=-dalpha*limiter;
   
   
-	  			bcyc[i]=bcyc_s+del_cyc;
+          bcyc[i]=bcyc_s+del_cyc;
           bcys[i]=bcys_s+del_cys;
   
   
-	  			*flag_jac_ptr = 10;
+          *flag_jac_ptr = 10;
   
           up_cy[i]=1;
           goto CYEND;
@@ -2499,57 +2277,57 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
   
     /*THRUST AND MOMENT*/
     if ((trmco[i] == 1) && (trmcy[i] == 1)) {
-      if (up_co[i] < trufq_co[i])	/*will be updated at the collective pitch update frequency*/ {
+      if (up_co[i] < trufq_co[i]) /*will be updated at the collective pitch update frequency*/ {
         up_co[i] += 1;
-	    }
+      }
       else {
         trnw = 1;
         /*Message("flag_jac %d",*flag_jac_ptr);*/
-	  	  if (*flag_jac_ptr == 0) {
+        if (*flag_jac_ptr == 0) {
           /*modify_bcop();*/
   
-	  			/*store ct_s cmx_s cmy_s*/
+          /*store ct_s cmx_s cmy_s*/
           *ct_s_ptr  = CT[i];
           *cmx_s_ptr = CMX[i];
           *cmy_s_ptr = CMY[i];
   
-	  			*bcop_s_ptr = bcop[i];
+          *bcop_s_ptr = bcop[i];
           *bcys_s_ptr = bcys[i];
           *bcyc_s_ptr = bcyc[i];
   
           if (dbg == 1) {
             Message0("Trimming collective and cyclic pitch: ON \n");
-	  			  Message0("CT(actual)= %f CT(desired)= %f \n", CT[i], ctd[i]);
-	  			  Message0("CMX(actual)= %f CMX(desired)= %f \n", CMX[i], cmxd[i]);
-	  			  Message0("CMY(actual)= %f CMY(desired)= %f \n", CMY[i], cmyd[i]);
+            Message0("CT(actual)= %f CT(desired)= %f \n", CT[i], ctd[i]);
+            Message0("CMX(actual)= %f CMX(desired)= %f \n", CMX[i], cmxd[i]);
+            Message0("CMY(actual)= %f CMY(desired)= %f \n", CMY[i], cmyd[i]);
           }
           
-	  			/*Message0("%d CO ALPHA PLUS \n",myid);*/
+          /*Message0("%d CO ALPHA PLUS \n",myid);*/
           bcop[i]=*bcop_s_ptr+dalpha;
-	  			bcys[i]=*bcys_s_ptr;
-	  			bcyc[i]=*bcyc_s_ptr;
+          bcys[i]=*bcys_s_ptr;
+          bcyc[i]=*bcyc_s_ptr;
   
-	  			*bcop_h_ptr=bcop[i];
+          *bcop_h_ptr=bcop[i];
   
           *flag_jac_ptr = 1;
   
-	  			goto COYEND;
+          goto COYEND;
         }
   
-	  		if (*flag_jac_ptr == 1) {
+        if (*flag_jac_ptr == 1) {
   
-	  			/*store ct_h cmx_h cmy_h*/
-	  			*ct_h_ptr  = CT[i];
+          /*store ct_h cmx_h cmy_h*/
+          *ct_h_ptr  = CT[i];
           *cmx_h_ptr = CMX[i];
           *cmy_h_ptr = CMY[i];
   
   
-	  			/*Message0("%d CO ALPHA MINUS \n",myid);*/
+          /*Message0("%d CO ALPHA MINUS \n",myid);*/
           bcop[i]=*bcop_s_ptr-dalpha;
-	  			bcys[i]=*bcys_s_ptr;
-	  			bcyc[i]=*bcyc_s_ptr;
+          bcys[i]=*bcys_s_ptr;
+          bcyc[i]=*bcyc_s_ptr;
   
-	  			*bcop_l_ptr=bcop[i];
+          *bcop_l_ptr=bcop[i];
   
           *flag_jac_ptr = -1;
   
@@ -2558,36 +2336,36 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
   
   
         if (*flag_jac_ptr == -1) {
-	  			/*store ct_l cmx_l cmy_l*/
-	  			*ct_l_ptr  = CT[i];
+          /*store ct_l cmx_l cmy_l*/
+          *ct_l_ptr  = CT[i];
           *cmx_l_ptr = CMX[i];
           *cmy_l_ptr = CMY[i];
   
   
-	  			/*Message0("%d CYC ALPHA PLUS \n",myid); */
+          /*Message0("%d CYC ALPHA PLUS \n",myid); */
           bcop[i]=*bcop_s_ptr;
-	  			bcys[i]=*bcys_s_ptr;
-	  			bcyc[i]=*bcyc_s_ptr+dalpha;
+          bcys[i]=*bcys_s_ptr;
+          bcyc[i]=*bcyc_s_ptr+dalpha;
   
           *bcyc_h_ptr = bcyc[i];
   
           *flag_jac_ptr = 2;
   
-	  			goto COYEND;
+          goto COYEND;
         }
   
   
         if (*flag_jac_ptr == 2) {
-	  			/*store ct_hc cmx_hc cmy_hc*/
-	  			*ct_hc_ptr  = CT[i];
+          /*store ct_hc cmx_hc cmy_hc*/
+          *ct_hc_ptr  = CT[i];
           *cmx_hc_ptr = CMX[i];
           *cmy_hc_ptr = CMY[i];
   
   
-	  			/*Message0("%d CYC ALPHA MINUS \n",myid); */
+          /*Message0("%d CYC ALPHA MINUS \n",myid); */
           bcop[i]=*bcop_s_ptr;
-	  			bcys[i]=*bcys_s_ptr;
-	  			bcyc[i]=*bcyc_s_ptr-dalpha;
+          bcys[i]=*bcys_s_ptr;
+          bcyc[i]=*bcyc_s_ptr-dalpha;
   
           *bcyc_l_ptr = bcyc[i];
   
@@ -2598,18 +2376,18 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
   
   
         if (*flag_jac_ptr == -2) {
-	  			/*store ct_lc cmx_lc cmy_lc*/
-	  			*ct_lc_ptr  = CT[i];
+          /*store ct_lc cmx_lc cmy_lc*/
+          *ct_lc_ptr  = CT[i];
           *cmx_lc_ptr = CMX[i];
           *cmy_lc_ptr = CMY[i];
   
   
-	  			/*Message0("%d CYS ALPHA PLUS \n",myid);*/
+          /*Message0("%d CYS ALPHA PLUS \n",myid);*/
           bcop[i]=*bcop_s_ptr;
-	  			bcys[i]=*bcys_s_ptr+dalpha;
-	  			bcyc[i]=*bcyc_s_ptr;
+          bcys[i]=*bcys_s_ptr+dalpha;
+          bcyc[i]=*bcyc_s_ptr;
   
-	  			*bcys_h_ptr = bcys[i];
+          *bcys_h_ptr = bcys[i];
   
           *flag_jac_ptr = 3;
   
@@ -2618,18 +2396,18 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
   
   
         if (*flag_jac_ptr == 3) {
-	  			/*store ct_hs cmx_hs cmy_hs*/
-	  			*ct_hs_ptr  = CT[i];
+          /*store ct_hs cmx_hs cmy_hs*/
+          *ct_hs_ptr  = CT[i];
           *cmx_hs_ptr = CMX[i];
           *cmy_hs_ptr = CMY[i];
   
   
-	  			/*Message0("%d CYS ALPHA MINUS \n", myid);*/
-	  		  bcop[i]=*bcop_s_ptr;
-	  			bcys[i]=*bcys_s_ptr-dalpha;
-	  			bcyc[i]=*bcyc_s_ptr;
+          /*Message0("%d CYS ALPHA MINUS \n", myid);*/
+          bcop[i]=*bcop_s_ptr;
+          bcys[i]=*bcys_s_ptr-dalpha;
+          bcyc[i]=*bcyc_s_ptr;
   
-	  			*bcys_l_ptr = bcys[i];
+          *bcys_l_ptr = bcys[i];
   
           *flag_jac_ptr = -3;
   
@@ -2637,115 +2415,115 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
         }
   
         if (*flag_jac_ptr == -3) {
-	  			/*store ct_ls cmx_ls cmy_ls*/
-	  			*ct_ls_ptr  = CT[i];
+          /*store ct_ls cmx_ls cmy_ls*/
+          *ct_ls_ptr  = CT[i];
           *cmx_ls_ptr = CMX[i];
           *cmy_ls_ptr = CMY[i];
   
   
-	  			/*determine new angle*/
+          /*determine new angle*/
   
           ct_s     = *ct_s_ptr;
-	  			cmx_s    = *cmx_s_ptr;
+          cmx_s    = *cmx_s_ptr;
           cmy_s    = *cmy_s_ptr;
           ct_l     = *ct_l_ptr;
-	  			cmx_l    = *cmx_l_ptr;
+          cmx_l    = *cmx_l_ptr;
           cmy_l    = *cmy_l_ptr;
           ct_h     = *ct_h_ptr;
-	  			cmx_h    = *cmx_h_ptr;
+          cmx_h    = *cmx_h_ptr;
           cmy_h    = *cmy_h_ptr;
           ct_lc    = *ct_lc_ptr;
-	  			cmx_lc   = *cmx_lc_ptr;
+          cmx_lc   = *cmx_lc_ptr;
           cmy_lc   = *cmy_lc_ptr;
           ct_hc    = *ct_hc_ptr;
-	  			cmx_hc   = *cmx_hc_ptr;
+          cmx_hc   = *cmx_hc_ptr;
           cmy_hc   = *cmy_hc_ptr;
           ct_ls    = *ct_ls_ptr;
-	  			cmx_ls   = *cmx_ls_ptr;
+          cmx_ls   = *cmx_ls_ptr;
           cmy_ls   = *cmy_ls_ptr;
           ct_hs    = *ct_hs_ptr;
-	  			cmx_hs   = *cmx_hs_ptr;
+          cmx_hs   = *cmx_hs_ptr;
           cmy_hs   = *cmy_hs_ptr;
   
           bcop_l = *bcop_l_ptr;
           bcop_s = *bcop_s_ptr;
           bcop_h = *bcop_h_ptr;
-	  			bcyc_l = *bcyc_l_ptr;
-	  			bcyc_s = *bcyc_s_ptr;
-	  			bcyc_h = *bcyc_h_ptr;
-	  			bcys_l = *bcys_l_ptr;
-	  			bcys_s = *bcys_s_ptr;
-	  			bcys_h = *bcys_h_ptr;
+          bcyc_l = *bcyc_l_ptr;
+          bcyc_s = *bcyc_s_ptr;
+          bcyc_h = *bcyc_h_ptr;
+          bcys_l = *bcys_l_ptr;
+          bcys_s = *bcys_s_ptr;
+          bcys_h = *bcys_h_ptr;
   
   
           /*d(ct)/d(bcop)*/
-	  			Ctmp=(ct_s-ct_h-(bcop_s-bcop_h)/(bcop_s-bcop_l)*(ct_s-ct_l))/
+          Ctmp=(ct_s-ct_h-(bcop_s-bcop_h)/(bcop_s-bcop_l)*(ct_s-ct_l))/
             ((bcop_s-bcop_h)*(bcop_h-bcop_l));
-	  			Btmp=(ct_s-ct_l-Ctmp*(bcop_s*bcop_s - bcop_l*bcop_l))/
+          Btmp=(ct_s-ct_l-Ctmp*(bcop_s*bcop_s - bcop_l*bcop_l))/
             (bcop_s-bcop_l);
           dct_bcop = Btmp+2.*Ctmp*bcop_s;
   
   
           /*d(cmx)/d(bcop)*/
-	  			Ctmp=(cmx_s-cmx_h-(bcop_s-bcop_h)/(bcop_s-bcop_l)*(cmx_s-cmx_l))/
+          Ctmp=(cmx_s-cmx_h-(bcop_s-bcop_h)/(bcop_s-bcop_l)*(cmx_s-cmx_l))/
             ((bcop_s-bcop_h)*(bcop_h-bcop_l));
-	  			Btmp=(cmx_s-cmx_l-Ctmp*(bcop_s*bcop_s - bcop_l*bcop_l))/
+          Btmp=(cmx_s-cmx_l-Ctmp*(bcop_s*bcop_s - bcop_l*bcop_l))/
             (bcop_s-bcop_l);
           dcmx_bcop = Btmp+2.*Ctmp*bcop_s;
   
   
           /*d(cmy)/d(bcop)*/
-	  			Ctmp=(cmy_s-cmy_h-(bcop_s-bcop_h)/(bcop_s-bcop_l)*(cmy_s-cmy_l))/
+          Ctmp=(cmy_s-cmy_h-(bcop_s-bcop_h)/(bcop_s-bcop_l)*(cmy_s-cmy_l))/
             ((bcop_s-bcop_h)*(bcop_h-bcop_l));
-	  			Btmp=(cmy_s-cmy_l-Ctmp*(bcop_s*bcop_s - bcop_l*bcop_l))/
+          Btmp=(cmy_s-cmy_l-Ctmp*(bcop_s*bcop_s - bcop_l*bcop_l))/
             (bcop_s-bcop_l);
           dcmy_bcop = Btmp+2.*Ctmp*bcop_s;
   
   
           /*d(ct)/d(bcys)*/
-	  			Ctmp=(ct_s-ct_hs-(bcys_s-bcys_h)/(bcys_s-bcys_l)*(ct_s-ct_ls))/
+          Ctmp=(ct_s-ct_hs-(bcys_s-bcys_h)/(bcys_s-bcys_l)*(ct_s-ct_ls))/
             ((bcys_s-bcys_h)*(bcys_h-bcys_l));
-	  			Btmp=(ct_s-ct_ls-Ctmp*(bcys_s*bcys_s - bcys_l*bcys_l))/
+          Btmp=(ct_s-ct_ls-Ctmp*(bcys_s*bcys_s - bcys_l*bcys_l))/
             (bcys_s-bcys_l);
           dct_bcys = Btmp+2.*Ctmp*bcys_s;
   
   
-	  			/*d(cmx)/d(bcys)*/
-	  			Ctmp=(cmx_s-cmx_hs-(bcys_s-bcys_h)/(bcys_s-bcys_l)*(cmx_s-cmx_ls))/
+          /*d(cmx)/d(bcys)*/
+          Ctmp=(cmx_s-cmx_hs-(bcys_s-bcys_h)/(bcys_s-bcys_l)*(cmx_s-cmx_ls))/
             ((bcys_s-bcys_h)*(bcys_h-bcys_l));
-	  			Btmp=(cmx_s-cmx_ls-Ctmp*(bcys_s*bcys_s - bcys_l*bcys_l))/
+          Btmp=(cmx_s-cmx_ls-Ctmp*(bcys_s*bcys_s - bcys_l*bcys_l))/
             (bcys_s-bcys_l);
           dcmx_bcys = Btmp+2.*Ctmp*bcys_s;
   
   
-	  			/*d(cmy)/d(bcys)*/
-	  			Ctmp=(cmy_s-cmy_hs-(bcys_s-bcys_h)/(bcys_s-bcys_l)*(cmy_s-cmy_ls))/
+          /*d(cmy)/d(bcys)*/
+          Ctmp=(cmy_s-cmy_hs-(bcys_s-bcys_h)/(bcys_s-bcys_l)*(cmy_s-cmy_ls))/
             ((bcys_s-bcys_h)*(bcys_h-bcys_l));
-	  			Btmp=(cmy_s-cmy_ls-Ctmp*(bcys_s*bcys_s - bcys_l*bcys_l))/
+          Btmp=(cmy_s-cmy_ls-Ctmp*(bcys_s*bcys_s - bcys_l*bcys_l))/
             (bcys_s-bcys_l);
           dcmy_bcys = Btmp+2.*Ctmp*bcys_s;
   
   
           /*d(ct)/d(bcyc)*/
-	  			Ctmp=(ct_s-ct_hc-(bcyc_s-bcyc_h)/(bcyc_s-bcyc_l)*(ct_s-ct_lc))/
+          Ctmp=(ct_s-ct_hc-(bcyc_s-bcyc_h)/(bcyc_s-bcyc_l)*(ct_s-ct_lc))/
             ((bcyc_s-bcyc_h)*(bcyc_h-bcyc_l));
-	  			Btmp=(ct_s-ct_lc-Ctmp*(bcyc_s*bcyc_s - bcyc_l*bcyc_l))/
+          Btmp=(ct_s-ct_lc-Ctmp*(bcyc_s*bcyc_s - bcyc_l*bcyc_l))/
             (bcyc_s-bcyc_l);
           dct_bcyc = Btmp+2.*Ctmp*bcyc_s;
   
   
-	  			/*d(cmx)/d(bcyc)*/
-	  			Ctmp=(cmx_s-cmx_hc-(bcyc_s-bcyc_h)/(bcyc_s-bcyc_l)*(cmx_s-cmx_lc))/
+          /*d(cmx)/d(bcyc)*/
+          Ctmp=(cmx_s-cmx_hc-(bcyc_s-bcyc_h)/(bcyc_s-bcyc_l)*(cmx_s-cmx_lc))/
             ((bcyc_s-bcyc_h)*(bcyc_h-bcyc_l));
-	  			Btmp=(cmx_s-cmx_lc-Ctmp*(bcyc_s*bcyc_s - bcyc_l*bcyc_l))/
+          Btmp=(cmx_s-cmx_lc-Ctmp*(bcyc_s*bcyc_s - bcyc_l*bcyc_l))/
             (bcyc_s-bcyc_l);
           dcmx_bcyc = Btmp+2.*Ctmp*bcyc_s;
   
   
-	  			/*d(cmy)/d(bcyc)*/
-	  			Ctmp=(cmy_s-cmy_hc-(bcyc_s-bcyc_h)/(bcyc_s-bcyc_l)*(cmy_s-cmy_lc))/
+          /*d(cmy)/d(bcyc)*/
+          Ctmp=(cmy_s-cmy_hc-(bcyc_s-bcyc_h)/(bcyc_s-bcyc_l)*(cmy_s-cmy_lc))/
             ((bcyc_s-bcyc_h)*(bcyc_h-bcyc_l));
-	  			Btmp=(cmy_s-cmy_lc-Ctmp*(bcyc_s*bcyc_s - bcyc_l*bcyc_l))/
+          Btmp=(cmy_s-cmy_lc-Ctmp*(bcyc_s*bcyc_s - bcyc_l*bcyc_l))/
             (bcyc_s-bcyc_l);
           dcmy_bcyc = Btmp+2.*Ctmp*bcyc_s;
   
@@ -2754,25 +2532,25 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
           /*det_jac*/
           det_jac = dct_bcop*dcmy_bcyc*dcmx_bcys +
           dct_bcyc*dcmy_bcys*dcmx_bcop +
-	  		  dct_bcys*dcmy_bcop*dcmx_bcyc -
-	  		  dct_bcys*dcmy_bcyc*dcmx_bcop -
-	  		  dct_bcyc*dcmy_bcop*dcmx_bcys -
-	  		  dct_bcop*dcmy_bcys*dcmx_bcyc;
+          dct_bcys*dcmy_bcop*dcmx_bcyc -
+          dct_bcys*dcmy_bcyc*dcmx_bcop -
+          dct_bcyc*dcmy_bcop*dcmx_bcys -
+          dct_bcop*dcmy_bcys*dcmx_bcyc;
   
           det_jac=1./det_jac;
   
   
-	  			del_co=trdf_co[i]*det_jac * (
+          del_co=trdf_co[i]*det_jac * (
             (dcmy_bcyc*dcmx_bcys - dcmy_bcys*dcmx_bcyc)*(ctd[i]-ct_s) +
             (dct_bcys*dcmx_bcyc - dct_bcyc*dcmx_bcys)*(cmyd[i]-cmy_s) +
             (dct_bcyc*dcmy_bcys - dct_bcys*dcmy_bcyc)*(cmxd[i]-cmx_s));
   
-	  			del_cyc=trdf_cy[i]*det_jac * (
-	  			  (dcmy_bcys*dcmx_bcop - dcmy_bcop*dcmx_bcys)*(ctd[i]-ct_s) +
-	  			  (dct_bcop*dcmx_bcys - dct_bcys*dcmx_bcop)*(cmyd[i]-cmy_s) +
+          del_cyc=trdf_cy[i]*det_jac * (
+            (dcmy_bcys*dcmx_bcop - dcmy_bcop*dcmx_bcys)*(ctd[i]-ct_s) +
+            (dct_bcop*dcmx_bcys - dct_bcys*dcmx_bcop)*(cmyd[i]-cmy_s) +
             (dct_bcys*dcmy_bcop - dct_bcop*dcmy_bcys)*(cmxd[i]-cmx_s));
   
-	  			del_cys=trdf_cy[i]*det_jac * (
+          del_cys=trdf_cy[i]*det_jac * (
             (dcmy_bcop*dcmx_bcyc - dcmy_bcyc*dcmx_bcop)*(ctd[i]-ct_s) +
             (dct_bcyc*dcmx_bcop - dct_bcop*dcmx_bcyc)*(cmyd[i]-cmy_s) +
             (dct_bcop*dcmy_bcyc - dct_bcyc*dcmy_bcop)*(cmxd[i]-cmx_s));
@@ -2781,31 +2559,31 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
           /*limiter*/
           if(del_co  > dalpha*limiter) 
             del_co = dalpha*limiter;
- 	  			if(del_cyc > dalpha*limiter) 
+          if(del_cyc > dalpha*limiter) 
             del_cyc= dalpha*limiter;
           if(del_cys > dalpha*limiter) 
             del_cys= dalpha*limiter;
           if(del_co  < -dalpha*limiter) 
             del_co = -dalpha*limiter;
-	  			if(del_cyc < -dalpha*limiter) 
+          if(del_cyc < -dalpha*limiter) 
             del_cyc= -dalpha*limiter;
           if(del_cys < -dalpha*limiter) 
             del_cys= -dalpha*limiter;
 
-	  			bcop[i] = bcop_s + del_co;
-	  			bcyc[i] = bcyc_s + del_cyc;
+          bcop[i] = bcop_s + del_co;
+          bcyc[i] = bcyc_s + del_cyc;
           bcys[i] = bcys_s + del_cys;
   
           if (dbg == 1){
-	  			  Message0("%f = new collective for rotor %d, \n "
+            Message0("%f = new collective for rotor %d, \n "
               "%f = new cyclic cos for rotor %d, \n "
               "%f = new cyclic sin for rotor %d\n",
               bcop[i]*180/M_PI, i+1, bcyc[i]*180/M_PI, i+1, bcys[i]*180/M_PI,
               i+1);
           }
   
-	  			*flag_jac_ptr = 10;
-	    
+          *flag_jac_ptr = 10;
+      
           up_co[i]=1;
 
           /*my_force_moment_balancing(i, sum_thrust[i]);*/
@@ -2822,19 +2600,21 @@ void Free_Thread_Memory(Thread *t, char *mem_name)
 /*---------------------------------------------------------------------------*/
 DEFINE_EXECUTE_ON_LOADING(my_on_loading, libname)
 /*---------------------------------------------------------------------------*/
-
+/* Registers UDM names when the UDF library is loaded.                       */
+/*---------------------------------------------------------------------------*/
 {
-  Message0("!! Info: Ensure you have pre-allocated at least %d UDM locations in the GUI/TUI !!", NUM_UDM+2);
-	Set_User_Memory_Name(0, "Distance from Rotor Centre");
-	Set_User_Memory_Name(1, "Azimuth Angle");
-	Set_User_Memory_Name(2, "Pitch Angle at Section");
-	Set_User_Memory_Name(3, "Total Velocity at Section");
-	Set_User_Memory_Name(4, "Chord Length at Section");
-	Set_User_Memory_Name(5, "Cell in Rotor Zone");
-	Set_User_Memory_Name(6, "Azimuthal Sigma Value");
-	Set_User_Memory_Name(7, "Angle of Attack at Section");
-	Set_User_Memory_Name(8, "Angle Between Cell and Rotor Blade");
-  Set_User_Memory_Name(9, "Azimuthal Distance to Rotor Blade");
+  Message0("!! Info: Ensure you have pre-allocated at least %d UDM locations "
+    "in the GUI/TUI !!\n", NUM_UDM + 2);
+  Set_User_Memory_Name(0,  "Distance from Rotor Centre");
+  Set_User_Memory_Name(1,  "Azimuth Angle");
+  Set_User_Memory_Name(2,  "Pitch Angle at Section");
+  Set_User_Memory_Name(3,  "Total Velocity at Section");
+  Set_User_Memory_Name(4,  "Chord Length at Section");
+  Set_User_Memory_Name(5,  "Cell in Rotor Zone");
+  Set_User_Memory_Name(6,  "Azimuthal Sigma Value");
+  Set_User_Memory_Name(7,  "Angle of Attack at Section");
+  Set_User_Memory_Name(8,  "Angle Between Cell and Rotor Blade");
+  Set_User_Memory_Name(9,  "Azimuthal Distance to Rotor Blade");
   Set_User_Memory_Name(10, "Gaussian Weighting Factor");
   Set_User_Memory_Name(11, "Fz term at Section");
   Set_User_Memory_Name(12, "Local Index");
@@ -2843,9 +2623,8 @@ DEFINE_EXECUTE_ON_LOADING(my_on_loading, libname)
 /*---------------------------------------------------------------------------*/
 DEFINE_ON_DEMAND(my_rotor_inputs)
 /*---------------------------------------------------------------------------*/
-/*				       				       */
-/*				       				       */
-/*Version	Date	Name			Remarks	       	       */
+/* Reads rotor geometry, blade, and trimming parameters from the GUI (scheme */
+/* panel) and broadcasts them from host to solver nodes.                     */
 /*---------------------------------------------------------------------------*/
 {
 
@@ -3136,118 +2915,118 @@ DEFINE_ON_DEMAND(my_rotor_inputs)
       dskco[j][2] = dskco_2[j];
       if (dbg == 1) {
         Message0 ("\n\n %d Rotor zone %d\n", myid, j+1);
-	      Message0 (" %d Number of Blades = %d\n",myid, nbld[j]) ;
-	      Message0 (" %d Rotor Radius = %g\n",myid, rrl[j]) ;
-	      Message0 (" %d Rotor Speed = %g\n",myid, rspe[j]) ;
-	      Message0 (" %d Tip Effect = %g\n",myid, teff[j]) ;
+        Message0 (" %d Number of Blades = %d\n",myid, nbld[j]) ;
+        Message0 (" %d Rotor Radius = %g\n",myid, rrl[j]) ;
+        Message0 (" %d Rotor Speed = %g\n",myid, rspe[j]) ;
+        Message0 (" %d Tip Effect = %g\n",myid, teff[j]) ;
         
-	      Message0 (" %d Rotor Disk Origin - X = %g\n",myid, dskco[j][0]) ;
-	      Message0 (" %d Rotor Disk Origin - Y = %g\n",myid, dskco[j][1]) ;
-	      Message0 (" %d Rotor Disk Origin - Z = %g\n",myid, dskco[j][2]) ;
+        Message0 (" %d Rotor Disk Origin - X = %g\n",myid, dskco[j][0]) ;
+        Message0 (" %d Rotor Disk Origin - Y = %g\n",myid, dskco[j][1]) ;
+        Message0 (" %d Rotor Disk Origin - Z = %g\n",myid, dskco[j][2]) ;
 
-	      Message0 (" %d Rotor Disk Pitch Angle = %g\n",myid, dpit[j]*180/M_PI) ;
-	      Message0 (" %d Rotor Disk Bank Angle = %g\n",myid, dban[j]*180/M_PI) ;
-	      /*if(trmco[j] == 1 && istflag != 1 || trmcy[j] == 1 && istflag != 1 ||
+        Message0 (" %d Rotor Disk Pitch Angle = %g\n",myid, dpit[j]*180/M_PI) ;
+        Message0 (" %d Rotor Disk Bank Angle = %g\n",myid, dban[j]*180/M_PI) ;
+        /*if(trmco[j] == 1 && istflag != 1 || trmcy[j] == 1 && istflag != 1 ||
            trmco_dat[j] == 1 || trmcy_dat[j] == 1)
         {
-	        bcop[j]=bcop_udf[j];
-	        Message0 (" %d   GUI COLLECTIVE BLADE PITCH IGNORED\n",myid);
-	      }*/
-	      Message0 (" %d Blade Pitch - Collective = %g\n",myid, bcop[j]*180/M_PI) ;
-	      /*if(trmco[j] == 1 && istflag != 1 || trmcy[j] == 1 && istflag != 1 ||
+          bcop[j]=bcop_udf[j];
+          Message0 (" %d   GUI COLLECTIVE BLADE PITCH IGNORED\n",myid);
+        }*/
+        Message0 (" %d Blade Pitch - Collective = %g\n",myid, bcop[j]*180/M_PI) ;
+        /*if(trmco[j] == 1 && istflag != 1 || trmcy[j] == 1 && istflag != 1 ||
            trmco_dat[j] == 1 || trmcy_dat[j] == 1)
         {
-	        bcyc[j]=bcyc_udf[j];
-	        bcys[j]=bcys_udf[j];
-	        Message0 (" %d   GUI CYCLIC BLADE PITCH IGNORED\n",myid);
-	      }*/
-	      Message0 (" %d Blade Pitch - Cyclic Sin = %g\n",myid, bcys[j]*180/M_PI) ;
-	      Message0 (" %d Blade Pitch - Cyclic Cos = %g\n",myid, bcyc[j]*180/M_PI) ;
-	      Message0 (" %d Blade Flapping - Collective = %g\n",myid, bflco[j]*180/M_PI) ;
-	      Message0 (" %d Blade Flapping - Cyclic Sin = %g\n",myid, bfls[j]*180/M_PI) ;
-	      Message0 (" %d Blade Flapping - Cyclic Cos = %g\n",myid, bflc[j]*180/M_PI) ;
-	      Message0 (" %d Rotor Face Zone ID = %d\n",myid, fzon[j]) ;
-	      Message0 (" %d ------------------\n",myid);
-	      Message0 (" %d Geometry Inputs\n",myid);
-	      Message0 (" %d ------------------\n",myid);
-	      Message0 (" %d Number of Blade sections = %d\n",myid, nsec[j]);
+          bcyc[j]=bcyc_udf[j];
+          bcys[j]=bcys_udf[j];
+          Message0 (" %d   GUI CYCLIC BLADE PITCH IGNORED\n",myid);
+        }*/
+        Message0 (" %d Blade Pitch - Cyclic Sin = %g\n",myid, bcys[j]*180/M_PI) ;
+        Message0 (" %d Blade Pitch - Cyclic Cos = %g\n",myid, bcyc[j]*180/M_PI) ;
+        Message0 (" %d Blade Flapping - Collective = %g\n",myid, bflco[j]*180/M_PI) ;
+        Message0 (" %d Blade Flapping - Cyclic Sin = %g\n",myid, bfls[j]*180/M_PI) ;
+        Message0 (" %d Blade Flapping - Cyclic Cos = %g\n",myid, bflc[j]*180/M_PI) ;
+        Message0 (" %d Rotor Face Zone ID = %d\n",myid, fzon[j]) ;
+        Message0 (" %d ------------------\n",myid);
+        Message0 (" %d Geometry Inputs\n",myid);
+        Message0 (" %d ------------------\n",myid);
+        Message0 (" %d Number of Blade sections = %d\n",myid, nsec[j]);
       }
-	    number_of_sections = nsec[j] ;
-	    for (k=0; k<number_of_sections; k++) {
+      number_of_sections = nsec[j] ;
+      for (k=0; k<number_of_sections; k++) {
         rsec[j][k] = rsec_flatten[j*20 + k];
         csec[j][k] = csec_flatten[j*20 + k];
         twst[j][k] = twst_flatten[j*20 + k];
         strncpy(type[j][k], &type_flatten[(j*20 + k)*30], 30);
         if (dbg == 1) {
           Message0 ("\n %d Radius of section = %g\n",myid, rsec[j][k]) ;
-	        Message0 (" %d Chord of section = %g\n",myid, csec[j][k]) ;
-	        Message0 (" %d Twist of section = %g\n",myid, twst[j][k]*180/M_PI) ;
-	        /*(void)strcpy(type[j][k],type_new[j][k]);*/
+          Message0 (" %d Chord of section = %g\n",myid, csec[j][k]) ;
+          Message0 (" %d Twist of section = %g\n",myid, twst[j][k]*180/M_PI) ;
+          /*(void)strcpy(type[j][k],type_new[j][k]);*/
             /*Message ("Name of the file = %s\n", type_new[j][k]);*/
-	        Message0 (" %d Name of the file = %s\n",myid, type[j][k]);
+          Message0 (" %d Name of the file = %s\n",myid, type[j][k]);
         }
-	    }
+      }
 
-	    if(itrm == 1) {
-	      if (dbg == 1) {
+      if(itrm == 1) {
+        if (dbg == 1) {
           Message0 (" %d ------------------\n",myid);
-	        Message0 (" %d Trimming Inputs\n",myid);
-	        Message0 (" %d ------------------\n",myid);
-	        Message0 (" %d Collective Pitch = %d\n",myid, trmco[j]);
-	        Message0 (" %d Cyclic Pitch = %d\n",myid, trmcy[j]);
-	        Message0 (" %d Update Frequency = %d\n",myid, trufq[j]);
-	        Message0 (" %d Damping Factor = %g\n",myid, trdf[j]);
+          Message0 (" %d Trimming Inputs\n",myid);
+          Message0 (" %d ------------------\n",myid);
+          Message0 (" %d Collective Pitch = %d\n",myid, trmco[j]);
+          Message0 (" %d Cyclic Pitch = %d\n",myid, trmcy[j]);
+          Message0 (" %d Update Frequency = %d\n",myid, trufq[j]);
+          Message0 (" %d Damping Factor = %g\n",myid, trdf[j]);
         }
-	      if (trmco[j] == 1) {
+        if (trmco[j] == 1) {
           main_rot_thrust_target_init = ctd[0];
           if (dbg == 1) {
-	          Message0 (" %d Desired thrust coefficient = %g\n",myid, ctd[j]);
+            Message0 (" %d Desired thrust coefficient = %g\n",myid, ctd[j]);
             Message0 (" %d ------------------\n",myid);
           }
           Message0 (" %d Rotor %d thrust target = %g kN\n",myid, j+1, 
             0.5*RP_Get_Real("reference-density")*
             rspe[j] * rspe[j] * rrl[j] * rrl[j] * M_PI * rrl[j] * rrl[j] * ctd[j]/1000);
-	      }
-	      else {
-          if (dbg == 1) {
-	          Message0 (" %d ------------------\n",myid);
-	          Message0 (" %d Collective Pitch not selected\n",myid);
-	          Message0 (" %d ------------------\n",myid);
-          }
-	      }
-        if (dbg == 1) {
-	        if (trmcy[j] == 1) {
-	          Message0 (" %d Desired x-momentum coefficient = %g\n",myid, cmxd[j]);
-	          Message0 (" %d Desired y-momentum coefficient = %g\n",myid, cmyd[j]);
-	  	      if (j == 0) {
-	  		      for (m=0; m<10; m++) {                         
-	  		  	    if (forba[m] == 1) {
-	  		  	  	  if (momba[m] == 1) {
-	  		  	  		  Message0 (" %d Fuselage forces and moments to be "
-                      "balanced\n", myid);
-	  		  	  		  Message0 (" %d Co-ordinates of fuselage CG = [%f,%f,%f]\n",
-                      myid, cmgx[m], cmgy[m], cmgz[m]);
-	  		  	  	  }
-	  		  	  	  else {
-	  		  	  		  Message0 (" %d Fuselage forces to be balanced\n",myid);
-	  		  	  	  }
-	  		  	  	  Message0 (" %d Fuselage Face Thread ID = %d\n",myid, 
-                    fuseid[m]);
-	  		  	  	  break;				
-	  		  	    }                                                                        
-	  		      }   
-	  	      }
-	          Message0 (" %d ------------------\n",myid);
-	        }
-	        else {
-	          Message0 (" %d ------------------\n",myid);
-	          Message0 (" %d Cyclic pitch not selected\n",myid);
-	          Message0 (" %d -------------------------\n",myid);
-	        }
         }
-	    }
-	    else
-	      Message0 ("\n %d Trimming is not selected\n",myid);
+        else {
+          if (dbg == 1) {
+            Message0 (" %d ------------------\n",myid);
+            Message0 (" %d Collective Pitch not selected\n",myid);
+            Message0 (" %d ------------------\n",myid);
+          }
+        }
+        if (dbg == 1) {
+          if (trmcy[j] == 1) {
+            Message0 (" %d Desired x-momentum coefficient = %g\n",myid, cmxd[j]);
+            Message0 (" %d Desired y-momentum coefficient = %g\n",myid, cmyd[j]);
+            if (j == 0) {
+              for (m=0; m<10; m++) {                         
+                if (forba[m] == 1) {
+                  if (momba[m] == 1) {
+                    Message0 (" %d Fuselage forces and moments to be "
+                      "balanced\n", myid);
+                    Message0 (" %d Co-ordinates of fuselage CG = [%f,%f,%f]\n",
+                      myid, cmgx[m], cmgy[m], cmgz[m]);
+                  }
+                  else {
+                    Message0 (" %d Fuselage forces to be balanced\n",myid);
+                  }
+                  Message0 (" %d Fuselage Face Thread ID = %d\n",myid, 
+                    fuseid[m]);
+                  break;        
+                }                                                                        
+              }   
+            }
+            Message0 (" %d ------------------\n",myid);
+          }
+          else {
+            Message0 (" %d ------------------\n",myid);
+            Message0 (" %d Cyclic pitch not selected\n",myid);
+            Message0 (" %d -------------------------\n",myid);
+          }
+        }
+      }
+      else
+        Message0 ("\n %d Trimming is not selected\n",myid);
     }
 
     /*CALCULATE rout, rin, cout, cin from rsec, csec*/
@@ -3259,7 +3038,7 @@ DEFINE_ON_DEMAND(my_rotor_inputs)
 
         rout[j][k]=rsec[j][k+1];
         cout[j][k]=csec[j][k+1];
-	    }
+      }
     }
     for (j=0; j<nrtz; j++) {
       number_of_sections = nsec[j]-1 ;
@@ -3268,7 +3047,7 @@ DEFINE_ON_DEMAND(my_rotor_inputs)
           Message0("%d Rotor %d Section %d | rin %g rout %g | cin %g cout %g \n",myid,
             j+1,k,rin[j][k], rout[j][k], cin[j][k], cout[j][k]);
         }
-	    }
+      }
     }  
   
     /*input_airfoil_tables(&ktot,file_name);*/
@@ -3278,16 +3057,16 @@ DEFINE_ON_DEMAND(my_rotor_inputs)
       number_of_sections = nsec[j] ;
       for (k=0; k<number_of_sections; k++) {
         /*Message ("TEST\n") ;*/
-	      for(ic = 0; ic < ktot; ic++) {
-	        if (strcmp(type[j][k],exst_type[ic]) == 0) {
-	  	      /*Message("yes\n");*/
-	  	      goto LABEL2;
-	  	    }
+        for(ic = 0; ic < ktot; ic++) {
+          if (strcmp(type[j][k],exst_type[ic]) == 0) {
+            /*Message("yes\n");*/
+            goto LABEL2;
+          }
         }
         (void)strcpy(exst_type[ktot-1],type[j][k]);
-	      ktot=ktot+1;
-	      LABEL2:;
-	    }
+        ktot=ktot+1;
+        LABEL2:;
+      }
     }
   
     ktot=ktot-1;
@@ -3301,10 +3080,10 @@ DEFINE_ON_DEMAND(my_rotor_inputs)
         Message0("%d Airfoils found %s\n",myid, exst_type[ic]);
 
       (void)strcpy(file_name[ic],exst_type[ic]);
-	    (void)strcat(file_name[ic],".dat");
+      (void)strcat(file_name[ic],".dat");
       (void)strcpy(exst_type[ic],"");
       if (dbg == 1)
-	      Message0("%d Airfoil files existing in wkdir: %s\n",myid, file_name[ic]);
+        Message0("%d Airfoil files existing in wkdir: %s\n",myid, file_name[ic]);
     }
 
     my_get_solidity();
@@ -3337,17 +3116,17 @@ DEFINE_ON_DEMAND(my_rotor_inputs)
     /*determine if rho=const*/
     thread_loop_c(t,d) {
       if(FLUID_THREAD_P(t)) {
-	      if (DENSITY_METHOD(t) == RHO_CONSTANT) {
+        if (DENSITY_METHOD(t) == RHO_CONSTANT) {
           if (dbg == 1) {
-	  	      Message("DENSITY CONST \n");
+            Message("DENSITY CONST \n");
             Message("Mach number interpolation ignored \n");
           }
-	  	    rho_const = TRUE;
-	      }
-	      else {
-	  	    rho_const = FALSE;
-	      }
-	    }
+          rho_const = TRUE;
+        }
+        else {
+          rho_const = FALSE;
+        }
+      }
     }
   #endif
 
@@ -3416,9 +3195,9 @@ DEFINE_ON_DEMAND(my_rotor_inputs)
 /*---------------------------------------------------------------------------*/
 DEFINE_ADJUST(my_SrcComp, domain)
 /*---------------------------------------------------------------------------*/
-/*				       				       */
-/*				       				       */
-/*Version	Date	Name			Remarks	       	       */
+/* Main computation routine. Called each iteration. Loops over all rotor     */
+/* zones, computes aerodynamic forces per cell, applies source terms to the  */
+/* momentum equations, and runs the trimming algorithm if enabled.           */
 /*---------------------------------------------------------------------------*/
 {
   #if !RP_HOST /* This portion of the code is only run on nodes*/
@@ -3555,7 +3334,7 @@ DEFINE_ADJUST(my_SrcComp, domain)
     i = 0;
     while (i < nrtz) {
       if (dbg == 1){
-	      Message0("%d Rotor %d of %d \n",myid, i+1, nrtz);
+        Message0("%d Rotor %d of %d \n",myid, i+1, nrtz);
       }
       
       tc = Lookup_Thread(domain, czon[i]);
@@ -3600,16 +3379,16 @@ DEFINE_ADJUST(my_SrcComp, domain)
       coeff_denom = 0.5 * rho_ref * rrl[i] * rrl[i] * M_PI * rspe[i] * 
         rspe[i] * rrl[i] * rrl[i];
 
-	    flag_jac=0;
+      flag_jac=0;
       LABEL1:
-	    thrust = 0.0;
-	    torque = 0.0;
-	    Mx_pb = 0.0;
-	    My_pb = 0.0;
+      thrust = 0.0;
+      torque = 0.0;
+      Mx_pb = 0.0;
+      My_pb = 0.0;
       sum_area = 0.0;
       sum_sum_area = 0.0;
-	    alpha_tmax = -1000.0;
-	    alpha_tmin = 1000.0;
+      alpha_tmax = -1000.0;
+      alpha_tmin = 1000.0;
       local_indx = 0;
       count = 0;
       gauss_active = 0;
@@ -3628,7 +3407,7 @@ DEFINE_ADJUST(my_SrcComp, domain)
 
         my_get_radial_position(i, cc, tc, count, 
           &r_pb, &psi_pb, &r_pb2,
-	  	    &x_pb, &y_pb, &z_pb, &rotor_cell, 
+          &x_pb, &y_pb, &z_pb, &rotor_cell, 
           &r_total, &xx, &yy, &zz, &beta_pb,
           &dpitc, &dpits, &dbanc, &dbans);
 
@@ -3644,49 +3423,49 @@ DEFINE_ADJUST(my_SrcComp, domain)
           vol_sample_entries++;
         }
 
-	      my_vel_xyz_to_blade(i, cc, tc, count, 
+        my_vel_xyz_to_blade(i, cc, tc, count, 
           psi_pb, r_pb2, 
           &Usc, &Utc, &Unc,
           &aeps, &Utotal, &beta, 
           dpitc, dpits, dbanc, dbans,
           &psi_pbs, &psi_pbc, &betac, &betas);
 
-	  	  my_get_pitch(i, cc, tc, count, r_pb, 
+        my_get_pitch(i, cc, tc, count, r_pb, 
           psi_pb, &theta, psi_pbs, psi_pbc);
 
-	  	  my_get_chord_alm_area(i, cc, tc, count, r_pb, 
+        my_get_chord_alm_area(i, cc, tc, count, r_pb, 
           &chord);
 
-	  	  my_get_re(i, cc, tc, count, chord, 
+        my_get_re(i, cc, tc, count, chord, 
           Utotal, &Re_t);
-	  	  /*Message0("   Re_t %f \n",Re_t);*/
+        /*Message0("   Re_t %f \n",Re_t);*/
 
-	  	  my_get_ma(i, cc, tc, count, Utotal, 
+        my_get_ma(i, cc, tc, count, Utotal, 
           &Ma_t);
-	  	  /*Message0("   Ma_t %f \n",Ma_t);*/
+        /*Message0("   Ma_t %f \n",Ma_t);*/
 
-	  	  my_get_aoa(i, cc, tc, count, aeps, 
+        my_get_aoa(i, cc, tc, count, aeps, 
           theta, &alpha_t);
-	  	  /*Message0("   alpha_t %f \n",alpha_t*180/M_PI);*/	  	  
+        /*Message0("   alpha_t %f \n",alpha_t*180/M_PI);*/        
 
-	  	  my_get_cl(i, cc, tc, count, r_pb, 
+        my_get_cl(i, cc, tc, count, r_pb, 
           Ma_t, Re_t, alpha_t, &CL);
-	  	  /*Message0("   CL %f \n",CL);*/	  
+        /*Message0("   CL %f \n",CL);*/   
 
         my_get_cd(i, cc, tc, count, r_pb, 
           Ma_t, Re_t, alpha_t, &CD);
-	  	  /*Message0("   CD %f \n",CD);*/
+        /*Message0("   CD %f \n",CD);*/
 
-	  	  my_get_force(i, cc, tc, factor_ptr, 
+        my_get_force(i, cc, tc, factor_ptr, 
           &sum_area, count, CL, CD, 
           chord, aeps, Utotal, r_pb, 
           &Ftc, &Fnc, &Fsc, isunst, local_indx, 
           sample_vol);
-	  	  /*Message0("Ftc=%f Fnc=%f Fsc=%f  \n",Ftc, Fnc, Fsc);*/
+        /*Message0("Ftc=%f Fnc=%f Fsc=%f  \n",Ftc, Fnc, Fsc);*/
 
         my_force_blade_to_xyz(i, cc, tc, count, 
           Ftc, Fnc, Fsc, beta, psi_pb,
-	  	    &Fx, &Fy, &Fz,
+          &Fx, &Fy, &Fz,
           &Fz_pb, &Ft_pb, chord, r_pb, 
           &gwf, isunst, &rotor_cell,
           beta_pb, &gauss_active, &sum_gwf,
@@ -3705,13 +3484,13 @@ DEFINE_ADJUST(my_SrcComp, domain)
         if (flag_jac == 0) 
           my_get_source_terms(i, cc, tc, count, 
             xsource_ptr, ysource_ptr, zsource_ptr,
-	  	      xsource_old_ptr, ysource_old_ptr, zsource_old_ptr,
-	  	      Fx, Fy, Fz, urf_source, local_indx);
+            xsource_old_ptr, ysource_old_ptr, zsource_old_ptr,
+            Fx, Fy, Fz, urf_source, local_indx);
 
-	  	  thrust=thrust+Fz_pb;
+        thrust=thrust+Fz_pb;
 
-	  	  Mx_pb = Mx_pb + Fz_pb*y_pb;
-	  	  My_pb = My_pb + Fz_pb*x_pb;
+        Mx_pb = Mx_pb + Fz_pb*y_pb;
+        My_pb = My_pb + Fz_pb*x_pb;
         torque = torque + Ft_pb*sqrt(x_pb*x_pb + y_pb*y_pb);
         
         C_UDMI(cc, tc, 0) = r_pb;
@@ -3719,20 +3498,20 @@ DEFINE_ADJUST(my_SrcComp, domain)
         C_UDMI(cc, tc, 2) = theta * (180.0 / M_PI);
         C_UDMI(cc, tc, 3) = Utotal;
         C_UDMI(cc, tc, 4) = chord;
-	  	  C_UDMI(cc, tc, 5) = rotor_cell;
-	  	  C_UDMI(cc, tc, 6) = sigma_az;
+        C_UDMI(cc, tc, 5) = rotor_cell;
+        C_UDMI(cc, tc, 6) = sigma_az;
         C_UDMI(cc, tc, 7) = alpha_t* (180.0 / M_PI);
-	  	  C_UDMI(cc, tc, 8) = deltapsi;
+        C_UDMI(cc, tc, 8) = deltapsi;
         C_UDMI(cc, tc, 9) = az_dist;
         C_UDMI(cc, tc, 10) = gwf;
         C_UDMI(cc, tc, 11) = Fz;
         C_UDMI(cc, tc, 12) = local_indx; /* DO NOT ALTER THIS */
 
-	  	  alpha_tmax = fmax(alpha_tmax, alpha_t);
-	  	  alpha_tmin = fmin(alpha_tmin, alpha_t);
+        alpha_tmax = fmax(alpha_tmax, alpha_t);
+        alpha_tmin = fmin(alpha_tmin, alpha_t);
       
         local_indx++;
-	      count++;
+        count++;
       end_c_loop_int(cc,tc)
       
       if(isunst)
@@ -3745,36 +3524,36 @@ DEFINE_ADJUST(my_SrcComp, domain)
       sum_thrust[i] = PRF_GRSUM1(thrust);
 
       sum_Mx_pb = PRF_GRSUM1(Mx_pb);
-	    sum_My_pb = PRF_GRSUM1(My_pb);
-	    sum_torque[i] = PRF_GRSUM1(torque);
+      sum_My_pb = PRF_GRSUM1(My_pb);
+      sum_torque[i] = PRF_GRSUM1(torque);
 
-	    /*get_cone(i, sum_thrust);*/
+      /*get_cone(i, sum_thrust);*/
 
       my_get_ct(i, sum_thrust[i], coeff_denom);
       my_get_cmx(i, sum_Mx_pb, coeff_denom);
       my_get_cmy(i, sum_My_pb, coeff_denom);
 
-	    if (flag_jac == 0){
+      if (flag_jac == 0){
         power[i]=sum_torque[i]*rspe[i];
 
         if (dbg == 1) {
-	  	    Message0("Rotor %d Thrust %f ct= %f \n",i+1,sum_thrust[i],CT[i]);
-	  	    /*Message("    %d Rotor %d Thrust on node %f \n",myid,i+1,thrust);*/
+          Message0("Rotor %d Thrust %f ct= %f \n",i+1,sum_thrust[i],CT[i]);
+          /*Message("    %d Rotor %d Thrust on node %f \n",myid,i+1,thrust);*/
           Message0("Rotor %d Torque %f \n",i+1,sum_torque[i]);
           /*Message("    %d Rotor %d Torque on node %f \n",myid,i+1,torque);*/
-	  	    Message0("Rotor %d Power %f \n",i+1,power[i]);
-	  	    /*Message0("    %d Rotor %d Mx_pb %f cmx= %f \n",myid,i+1,sum_Mx_pb,
+          Message0("Rotor %d Power %f \n",i+1,power[i]);
+          /*Message0("    %d Rotor %d Mx_pb %f cmx= %f \n",myid,i+1,sum_Mx_pb,
           CMX); */
           /*Message("    %d Rotor %d Mx_pb on node %f \n",myid,i+1,Mx_pb);*/
-	  	    /*Message0("    %d Rotor %d My_pb %f cmy= %f \n",myid,i+1,sum_My_pb,
+          /*Message0("    %d Rotor %d My_pb %f cmy= %f \n",myid,i+1,sum_My_pb,
           CMY); */
-     	    /*Message("    %d Rotor %d My_pb on node %f \n",myid,i+1,My_pb);*/
+          /*Message("    %d Rotor %d My_pb on node %f \n",myid,i+1,My_pb);*/
         }
-	    }
+      }
 
-	    my_update_trimming(i, trufq_co, trufq_cy, 
+      my_update_trimming(i, trufq_co, trufq_cy, 
         trdf_co, trdf_cy,
-	  	  up_co, up_cy, 
+        up_co, up_cy, 
         &flag_jac,
         &ct_l, &ct_s, &ct_h,
         &bcop_l, &bcop_s, &bcop_h,
@@ -3791,8 +3570,8 @@ DEFINE_ADJUST(my_SrcComp, domain)
         sum_thrust[i]);
 
       if (flag_jac == 1 || flag_jac == -1 ||
-	  	  flag_jac == 2 || flag_jac == -2 ||
-	  	  flag_jac == 3 || flag_jac == -3) 
+        flag_jac == 2 || flag_jac == -2 ||
+        flag_jac == 3 || flag_jac == -3) 
         goto LABEL1;
 
       i += 1;
@@ -3804,374 +3583,127 @@ DEFINE_ADJUST(my_SrcComp, domain)
 }
 
 
-/*---------------------------------------------------------------------------*/
-DEFINE_SOURCE(my_xmom_src_1,cc,tc,dS,eqn)
-/*---------------------------------------------------------------------------*/
-/*				       				       */
-/*				       				       */
-/*Version	Date	Name			Remarks	       	       */
-/*---------------------------------------------------------------------------*/
-{
-  #if !RP_HOST
-    
-    real *xsource_ptr;
-    real source = 0.0;
-    int i = 0;				/*Rotor 1*/
-    int local_indx = (int)C_UDMI(cc, tc, 12);
-  
-    xsource_ptr = Get_Thread_Memory(tc,xsource[i]);
-  
-    if (xsource_ptr == NULL){
-      Message0("Error: xsource_ptr is NULL in DEFINE_SOURCE(my_xmom_src_1)\n");
-      source = 0.0;
-    }
-    else{
-      source = xsource_ptr[local_indx];
-    }
-  
-    return source;
-
-  #endif
-}
 
 /*---------------------------------------------------------------------------*/
-DEFINE_SOURCE(my_ymom_src_1,cc,tc,dS,eqn)
+/* MOMENTUM SOURCE TERM UDFs                                                 */
+/*                                                                           */
+/* Each rotor zone requires three momentum source UDFs (x, y, z). All       */
+/* twelve functions share the same structure; only the rotor index and the   */
+/* source array differ. The helper macro ROTOR_SRC_BODY reduces repetition. */
 /*---------------------------------------------------------------------------*/
-/*				       				       */
-/*				       				       */
-/*Version	Date	Name			Remarks	       	       */
-/*---------------------------------------------------------------------------*/
-{
-  #if !RP_HOST
-    
-    real *ysource_ptr;
-    real source = 0.0;
-    int i = 0;				/*Rotor 1*/
-    int local_indx = (int)C_UDMI(cc, tc, 12);
-  
-    ysource_ptr = Get_Thread_Memory(tc,ysource[i]);
-  
-    if (ysource_ptr == NULL) {
-      Message0("Error: ysource_ptr is NULL in DEFINE_SOURCE(my_ymom_src_1)\n");
-      source = 0.0;
-    }
-    else{
-      source = ysource_ptr[local_indx];
-    }
-  
-    return source;
-  #endif
-}
+#if !RP_HOST
+#define ROTOR_SRC_BODY(src_array, rotor_idx, fn_name)                         \
+  do {                                                                        \
+    real *src_ptr;                                                            \
+    real source   = 0.0;                                                      \
+    int local_indx = (int)C_UDMI(cc, tc, 12);                                \
+    src_ptr = Get_Thread_Memory(tc, (src_array)[rotor_idx]);                  \
+    if (src_ptr == NULL)                                                      \
+      Message0("Error: source ptr NULL in DEFINE_SOURCE(" #fn_name ")\n");    \
+    else                                                                      \
+      source = src_ptr[local_indx];                                           \
+    return source;                                                            \
+  } while (0)
+#endif
 
-/*---------------------------------------------------------------------------*/
-DEFINE_SOURCE(my_zmom_src_1,cc,tc,dS,eqn)
-/*---------------------------------------------------------------------------*/
-/*				       				       */
-/*				       				       */
-/*Version	Date	Name			Remarks	       	       */
-/*---------------------------------------------------------------------------*/
-{
-  #if !RP_HOST
-    
-    real *zsource_ptr;
-    real source = 0.0;
-    int i = 0;				/*Rotor 1*/
-    int local_indx = (int)C_UDMI(cc, tc, 12);
-  
-    zsource_ptr = Get_Thread_Memory(tc,zsource[i]);
-  
-    if (zsource_ptr == NULL) {
-      Message0("Error: zsource_ptr is NULL in DEFINE_SOURCE(my_zmom_src_1)\n");
-      source = 0.0;
+/* Rotor 1 (index 0) */
+DEFINE_SOURCE(my_xmom_src_1, cc, tc, dS, eqn) 
+    { 
+        #if !RP_HOST 
+            ROTOR_SRC_BODY(xsource, 0, my_xmom_src_1); 
+        #endif 
     }
-    else{
-      source = zsource_ptr[local_indx];
+        
+DEFINE_SOURCE(my_ymom_src_1, cc, tc, dS, eqn) 
+    { 
+        #if !RP_HOST 
+            ROTOR_SRC_BODY(ysource, 0, my_ymom_src_1); 
+        #endif 
     }
-  
-    return source;
-  #endif
-}
 
-/*---------------------------------------------------------------------------*/
-DEFINE_SOURCE(my_xmom_src_2,cc,tc,dS,eqn)
-/*---------------------------------------------------------------------------*/
-/*				       				       */
-/*				       				       */
-/*Version	Date	Name			Remarks	       	       */
-/*---------------------------------------------------------------------------*/
-{
-  #if !RP_HOST
-    
-    real *xsource_ptr;
-    real source = 0.0;
-    int i = 1;				/*Rotor 2*/
-    int local_indx = (int)C_UDMI(cc, tc, 12);
-  
-    xsource_ptr = Get_Thread_Memory(tc,xsource[i]);
-  
-    if (xsource_ptr == NULL) {
-      Message0("Error: xsource_ptr is NULL in DEFINE_SOURCE(my_xmom_src_1)\n");
-      source = 0.0;
+DEFINE_SOURCE(my_zmom_src_1, cc, tc, dS, eqn) 
+    { 
+        #if !RP_HOST 
+            ROTOR_SRC_BODY(zsource, 0, my_zmom_src_1); 
+        #endif 
     }
-    else{
-      source = xsource_ptr[local_indx];
-    }
-  
-    return source;
-  #endif
-}
 
-/*---------------------------------------------------------------------------*/
-DEFINE_SOURCE(my_ymom_src_2,cc,tc,dS,eqn)
-/*---------------------------------------------------------------------------*/
-/*				       				       */
-/*				       				       */
-/*Version	Date	Name			Remarks	       	       */
-/*---------------------------------------------------------------------------*/
-{
-  #if !RP_HOST
-    
-    real *ysource_ptr;
-    real source = 0.0;
-    int i = 1;				/*Rotor 2*/
-    int local_indx = (int)C_UDMI(cc, tc, 12);
-  
-    ysource_ptr = Get_Thread_Memory(tc,ysource[i]);
-  
-    if (ysource_ptr == NULL) {
-      Message0("Error: ysource_ptr is NULL in DEFINE_SOURCE(my_ymom_src_2)\n");
-      source = 0.0;
+/* Rotor 2 (index 1) */
+DEFINE_SOURCE(my_xmom_src_2, cc, tc, dS, eqn) 
+    { 
+        #if !RP_HOST 
+            ROTOR_SRC_BODY(xsource, 1, my_xmom_src_2); 
+        #endif 
     }
-    else{
-      source = ysource_ptr[local_indx];
+DEFINE_SOURCE(my_ymom_src_2, cc, tc, dS, eqn) 
+    { 
+        #if !RP_HOST 
+            ROTOR_SRC_BODY(ysource, 1, my_ymom_src_2); 
+        #endif 
     }
-  
-    return source;
-  #endif
-}
+DEFINE_SOURCE(my_zmom_src_2, cc, tc, dS, eqn) 
+    { 
+        #if !RP_HOST 
+            ROTOR_SRC_BODY(zsource, 1, my_zmom_src_2); 
+        #endif 
+    }
 
-/*---------------------------------------------------------------------------*/
-DEFINE_SOURCE(my_zmom_src_2,cc,tc,dS,eqn)
-/*---------------------------------------------------------------------------*/
-/*				       				       */
-/*				       				       */
-/*Version	Date	Name			Remarks	       	       */
-/*---------------------------------------------------------------------------*/
-{
-  #if !RP_HOST
-    
-    real *zsource_ptr;
-    real source = 0.0;
-    int i = 1;				/*Rotor 2*/
-    int local_indx = (int)C_UDMI(cc, tc, 12);
-  
-    zsource_ptr = Get_Thread_Memory(tc,zsource[i]);
-  
-    if (zsource_ptr == NULL) {
-      Message0("Error: zsource_ptr is NULL in DEFINE_SOURCE(my_zmom_src_2)\n");
-      source = 0.0;
+/* Rotor 3 (index 2) */
+DEFINE_SOURCE(my_xmom_src_3, cc, tc, dS, eqn) 
+    { 
+        #if !RP_HOST 
+            ROTOR_SRC_BODY(xsource, 2, my_xmom_src_3); 
+        #endif 
     }
-    else{
-      source = zsource_ptr[local_indx];
+DEFINE_SOURCE(my_ymom_src_3, cc, tc, dS, eqn) 
+    { 
+        #if !RP_HOST 
+            ROTOR_SRC_BODY(ysource, 2, my_ymom_src_3); 
+        #endif 
     }
-  
-    return source;
-  #endif
-}
+DEFINE_SOURCE(my_zmom_src_3, cc, tc, dS, eqn) 
+    { 
+        #if !RP_HOST 
+            ROTOR_SRC_BODY(zsource, 2, my_zmom_src_3); 
+        #endif 
+    }
 
-/*---------------------------------------------------------------------------*/
-DEFINE_SOURCE(my_xmom_src_3,cc,tc,dS,eqn)
-/*---------------------------------------------------------------------------*/
-/*				       				       */
-/*				       				       */
-/*Version	Date	Name			Remarks	       	       */
-/*---------------------------------------------------------------------------*/
-{
-  #if !RP_HOST
-    
-    real *xsource_ptr;
-    real source = 0.0;
-    int i = 2;				/*Rotor 3*/
-    int local_indx = (int)C_UDMI(cc, tc, 12);
-
-    xsource_ptr = Get_Thread_Memory(tc,xsource[i]);
-  
-    if (xsource_ptr == NULL) {
-      Message("Error: xsource_ptr is NULL in DEFINE_SOURCE(my_xmom_src_3)\n");
-      source = 0.0;
+/* Rotor 4 (index 3) */
+DEFINE_SOURCE(my_xmom_src_4, cc, tc, dS, eqn) 
+    { 
+        #if !RP_HOST 
+            ROTOR_SRC_BODY(xsource, 3, my_xmom_src_4); 
+        #endif 
     }
-    else{
-      source = xsource_ptr[local_indx];
+DEFINE_SOURCE(my_ymom_src_4, cc, tc, dS, eqn) 
+    { 
+        #if !RP_HOST 
+            ROTOR_SRC_BODY(ysource, 3, my_ymom_src_4); 
+        #endif 
     }
-  
-    return source;
-  #endif
-}
-
-/*---------------------------------------------------------------------------*/
-DEFINE_SOURCE(my_ymom_src_3,cc,tc,dS,eqn)
-/*---------------------------------------------------------------------------*/
-/*				       				       */
-/*				       				       */
-/*Version	Date	Name			Remarks	       	       */
-/*---------------------------------------------------------------------------*/
-{
-  #if !RP_HOST
-    
-    real *ysource_ptr;
-    real source = 0.0;
-    int i = 2;				/*Rotor 2*/
-    int local_indx = (int)C_UDMI(cc, tc, 12);
-  
-    ysource_ptr = Get_Thread_Memory(tc,ysource[i]);
-  
-    if (ysource_ptr == NULL) {
-      Message0("Error: ysource_ptr is NULL in DEFINE_SOURCE(my_ymom_src_2)\n");
-      source = 0.0;
+DEFINE_SOURCE(my_zmom_src_4, cc, tc, dS, eqn) 
+    { 
+        #if !RP_HOST 
+            ROTOR_SRC_BODY(zsource, 3, my_zmom_src_4); 
+        #endif 
     }
-    else{
-      source = ysource_ptr[local_indx];
-    }
-  
-    return source;
-  #endif
-}
-
-/*---------------------------------------------------------------------------*/
-DEFINE_SOURCE(my_zmom_src_3,cc,tc,dS,eqn)
-/*---------------------------------------------------------------------------*/
-/*				       				       */
-/*				       				       */
-/*Version	Date	Name			Remarks	       	       */
-/*---------------------------------------------------------------------------*/
-{
-  #if !RP_HOST
-    
-    real *zsource_ptr;
-    real source = 0.0;
-    int i = 2;				/*Rotor 3*/
-    int local_indx = (int)C_UDMI(cc, tc, 12);
-  
-    zsource_ptr = Get_Thread_Memory(tc, zsource[i]);
-  
-    if (zsource_ptr == NULL) {
-      Message0("Error: zsource_ptr is NULL in DEFINE_SOURCE(my_zmom_src_2)\n");
-      source = 0.0;
-    }
-    else{
-      source = zsource_ptr[local_indx];
-    }
-  
-    return source;
-  #endif
-}
-
-/*---------------------------------------------------------------------------*/
-DEFINE_SOURCE(my_xmom_src_4,cc,tc,dS,eqn)
-/*---------------------------------------------------------------------------*/
-/*				       				       */
-/*				       				       */
-/*Version	Date	Name			Remarks	       	       */
-/*---------------------------------------------------------------------------*/
-{
-  #if !RP_HOST
-    
-    real *xsource_ptr;
-    real source = 0.0;
-    int i = 3;				/*Rotor 4*/
-    int local_indx = (int)C_UDMI(cc, tc, 12);
-  
-    xsource_ptr = Get_Thread_Memory(tc,xsource[i]);
-  
-    if (xsource_ptr == NULL){
-      Message0("Error: xsource_ptr is NULL in DEFINE_SOURCE(my_xmom_src_1)\n");
-      source = 0.0;
-    }
-    else{
-      source = xsource_ptr[local_indx];
-    }
-  
-    return source;
-
-  #endif
-}
-
-/*---------------------------------------------------------------------------*/
-DEFINE_SOURCE(my_ymom_src_4,cc,tc,dS,eqn)
-/*---------------------------------------------------------------------------*/
-/*				       				       */
-/*				       				       */
-/*Version	Date	Name			Remarks	       	       */
-/*---------------------------------------------------------------------------*/
-{
-  #if !RP_HOST
-    
-    real *ysource_ptr;
-    real source = 0.0;
-    int i = 3;				/*Rotor 4*/
-    int local_indx = (int)C_UDMI(cc, tc, 12);
-  
-    ysource_ptr = Get_Thread_Memory(tc, ysource[i]);
-  
-    if (ysource_ptr == NULL) {
-      Message0("Error: ysource_ptr is NULL in DEFINE_SOURCE(my_ymom_src_1)\n");
-      source = 0.0;
-    }
-    else{
-      source = ysource_ptr[local_indx];
-    }
-  
-    return source;
-  #endif
-}
-
-/*---------------------------------------------------------------------------*/
-DEFINE_SOURCE(my_zmom_src_4,cc,tc,dS,eqn)
-/*---------------------------------------------------------------------------*/
-/*				       				       */
-/*				       				       */
-/*Version	Date	Name			Remarks	       	       */
-/*---------------------------------------------------------------------------*/
-{
-  #if !RP_HOST
-    
-    real *zsource_ptr;
-    real source = 0.0;
-    int i = 3;				/*Rotor 4*/
-    int local_indx = (int)C_UDMI(cc, tc, 12);
-  
-    zsource_ptr = Get_Thread_Memory(tc, zsource[i]);
-  
-    if (zsource_ptr == NULL) {
-      Message0("Error: zsource_ptr is NULL in DEFINE_SOURCE(my_zmom_src_1)\n");
-      source = 0.0;
-    }
-    else{
-      source = zsource_ptr[local_indx];
-    }
-  
-    return source;
-  #endif
-}
 
 /*---------------------------------------------------------------------------*/
 DEFINE_EXECUTE_AT_END(my_write_rotor_data_to_file)
 /*---------------------------------------------------------------------------*/
-/* When calling the file saving function, inputs are in the following order: */
-/* char File_name, char Data_name, real data_to_write, char time_str,        */ 
-/* int is_angle? The purpose of the final input, is_angle, is to convert */
-/* the data to degrees.                                                      */
+/* Appends per-rotor performance data (pitch angles, thrust, torque, power,  */
+/* and force/moment coefficients) to output files at the end of each         */
+/* iteration. Angle quantities are converted from radians to degrees.        */
 /*---------------------------------------------------------------------------*/
 {
   #if !RP_HOST
-    if(myid == 0) {
+    if (myid == 0) {
       FILE *fp = NULL;
-      int i = 0, h = 0;
-      int isangle = 0, istr_target = 0;
+      int i, h;
+      int num_outputs = (int)(sizeof(data_fname) / sizeof(data_fname[0]));
       real data_save[9], tr_target[3];
 
       for (i = 0; i < nrtz; i++) {
-       
         data_save[0] = bcop[i];
         data_save[1] = bcyc[i];
         data_save[2] = bcys[i];
@@ -4186,54 +3718,40 @@ DEFINE_EXECUTE_AT_END(my_write_rotor_data_to_file)
         tr_target[1] = cmxd[i];
         tr_target[2] = cmyd[i];
 
-        for (h = 0; h < (sizeof(data_fname) / sizeof(data_fname[0])); h++) {
-          isangle = 0;
-          istr_target = 0;
-
-          if (h < 3) {
-            isangle = 1;
-          }
-          if (h > 5) {
-            istr_target = 1;
-          }
+        for (h = 0; h < num_outputs; h++) {
+          int isangle     = (h < 3) ? 1 : 0;
+          int istr_target = (h > 5) ? 1 : 0;
 
           sprintf(newfilename, "rotor_%d_%s", i + 1, data_fname[h]);
-
           fp = fopen(newfilename, "a");
           if (fp == NULL) {
-            Message0("Error: Unable to open file for writing data.\n");
+            Message0("Error: Unable to open %s for writing.\n", newfilename);
+            continue;
+          }
+
+          if (isangle) {
+            fprintf(fp, "\n%d\t%f", N_ITER, data_save[h] * 180.0 / M_PI);
+            if (dbg == 1)
+              Message0("Writing Rotor %d %s = %f deg to %s\n",
+                i + 1, data_vname[h], data_save[h] * 180.0 / M_PI, newfilename);
+          }
+          else if (istr_target) {
+            fprintf(fp, "\n%d\t%f\t%f", N_ITER, data_save[h], tr_target[h - 6]);
+            if (dbg == 1)
+              Message0("Writing Rotor %d %s = %f (target %f) to %s\n",
+                i + 1, data_vname[h], data_save[h], tr_target[h - 6], newfilename);
           }
           else {
-            if (isangle == 1){
-              if (dbg == 1)
-                Message0("Writing Rotor %d %s = %f to %s\n", i+1, 
-                  data_vname[h], data_save[h]*180/M_PI, newfilename);
-
-              fprintf(fp, "\n%d\t%f", N_ITER, data_save[h]*180/M_PI);
-            }
-            if (isangle == 0){
-              if (istr_target == 1){
-                if (dbg == 1)
-                  Message0("Writing Rotor %d %s = %f to %s\n", i+1, 
-                    data_vname[h], data_save[h], newfilename);
-
-                fprintf(fp, "\n%d\t%f\t%f", N_ITER, data_save[h], 
-                  tr_target[h-6]);
-              }
-              if (istr_target == 0){
-                if (dbg == 1)
-                  Message0("Writing Rotor %d %s = %f to %s\n", i+1, 
-                    data_vname[h], data_save[h], newfilename);
-
-                fprintf(fp, "\n%d\t%f", N_ITER, data_save[h]);
-              }
-            }
-            fclose(fp);
+            fprintf(fp, "\n%d\t%f", N_ITER, data_save[h]);
             if (dbg == 1)
-              Message0("%s values written to %s\n", data_vname[h], 
-                newfilename);
+              Message0("Writing Rotor %d %s = %f to %s\n",
+                i + 1, data_vname[h], data_save[h], newfilename);
           }
-        }   
+
+          fclose(fp);
+          if (dbg == 1)
+            Message0("%s written to %s\n", data_vname[h], newfilename);
+        }
       }
     }
     trnw = 0;
